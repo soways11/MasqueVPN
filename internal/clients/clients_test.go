@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +210,9 @@ func TestUpdateAndRemove(t *testing.T) {
 
 // Файл реестра — секрет: в нём лежат ключи всех клиентов.
 func TestFileIsNotWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("в Windows права Unix не действуют, доступ решают ACL папки")
+	}
 	r := tempRegistry(t)
 	if _, err := r.Add(Client{Name: "кто-то"}); err != nil {
 		t.Fatal(err)

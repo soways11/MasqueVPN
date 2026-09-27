@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +57,10 @@ func TestDurationAndKeyFile(t *testing.T) {
 	dir := t.TempDir()
 	kf := filepath.Join(dir, "key")
 	os.WriteFile(kf, []byte(base64.RawURLEncoding.EncodeToString(make([]byte, 40))+"\n"), 0o600)
-	c, err := ParseClient([]byte(`{"server":"a:1","auth_key":"file:` + kf + `","rotation":{"every":"30m"}}`))
+	// Путь — через json.Marshal: в Windows в нём обратные слэши, а в JSON
+	// это начало escape-последовательности.
+	keyRef, _ := json.Marshal("file:" + kf)
+	c, err := ParseClient([]byte(`{"server":"a:1","auth_key":` + string(keyRef) + `,"rotation":{"every":"30m"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -135,6 +136,11 @@ func checkMode(t *testing.T, path string) {
 	st, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// В Windows права Unix не действуют: Go показывает у любого файла
+	// 0666, а доступ решают ACL папки. Проверка — только там, где права есть.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if mode := st.Mode().Perm(); mode != 0o600 {
 		t.Errorf("%s: права %o, ожидались 600", filepath.Base(path), mode)

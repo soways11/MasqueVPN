@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -116,7 +117,7 @@ func TestProfilesSurviveSaveLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode := st.Mode().Perm(); mode != 0o600 {
+	if mode := st.Mode().Perm(); mode != 0o600 && runtime.GOOS != "windows" {
 		t.Errorf("права %o, ожидались 600: внутри ключи", mode)
 	}
 

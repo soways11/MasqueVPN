@@ -48,7 +48,9 @@ echo "==> шаг 2/2: собираю приложение (gradlew $task)"
 cd "$root/mobile/android"
 # Первый запуск скачает дистрибутив Gradle по версии из
 # gradle/wrapper/gradle-wrapper.properties — это нормально и делается один раз.
-./gradlew "$task" ${GRADLE_ARGS:-}
+# Через sh, а не ./gradlew: из Windows файл попадает в git без права на
+# запуск, и раннер GitHub отвечал «Permission denied» (код 126).
+sh ./gradlew "$task" ${GRADLE_ARGS:-}
 
 echo
 if [ -f "$apk" ]; then

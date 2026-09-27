@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 // Где лежат ключи — вопрос не удобства: не туда положенные, они либо
 // теряются (переносная папка без профилей), либо становятся видны чужим
@@ -23,7 +26,17 @@ func TestDataDirFor(t *testing.T) {
 		{`C:\Program Files\masquevpn\masquevpn.exe`, "windows", none, `C:\Program Files\masquevpn`},
 	}
 	for _, c := range cases {
+		if c.goos == "linux" && runtime.GOOS == "windows" {
+			// filepath в Windows переписывает / в \ — пути Linux здесь не проверить.
+			continue
+		}
 		got := dataDirFor(c.exe, c.goos, c.exists)
+		if c.goos == "windows" && runtime.GOOS == "windows" {
+			if got != c.want {
+				t.Errorf("%s: каталог данных %q, ожидался %q", c.exe, got, c.want)
+			}
+			continue
+		}
 		if c.goos == "windows" {
 			// filepath на Linux не понимает обратных слэшей — сравниваем
 			// только то, что каталог не подменён на /var/lib.

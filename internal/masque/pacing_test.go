@@ -167,7 +167,13 @@ loop:
 	}
 	t.Logf("вход: %d пакетов, выход: %d датаграмм по %d байт", sent, len(at), target)
 
+	// Последний пакет мог попасть в очередь перед самым концом и уйти со
+	// следующим тактом расписания — ждём его, а не ловим гонку.
 	st := c.Stats()
+	for deadline := time.Now().Add(time.Second); st.PacketsOut < uint64(sent) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		st = c.Stats()
+	}
 	if st.PacketsOut != uint64(sent) || st.DatagramsOut < uint64(want) {
 		t.Fatalf("счётчики: %+v", st)
 	}
