@@ -13,6 +13,7 @@
 package androidcheck
 
 import (
+	"bytes"
 	"encoding/xml"
 	"io"
 	"os"
@@ -60,7 +61,7 @@ func collect(t *testing.T) (resources, map[string]string) {
 		if filepath.Ext(path) != ".xml" {
 			return nil
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := readText(path)
 		if err != nil {
 			return err
 		}
@@ -226,7 +227,7 @@ func TestViewIDsBelongToTheirLayout(t *testing.T) {
 // bindings — методы ядра, которые создал gobind (по BINDINGS.md).
 func bindings(t *testing.T) (static, profiles, tunnel map[string]bool) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "core", "BINDINGS.md"))
+	raw, err := readText(filepath.Join("..", "core", "BINDINGS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +300,7 @@ func TestCoreCallsExistInBindings(t *testing.T) {
 
 // Классы из манифеста есть в исходниках, и ни одна активность не забыта.
 func TestManifestMatchesSources(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(appDir, "AndroidManifest.xml"))
+	raw, err := readText(filepath.Join(appDir, "AndroidManifest.xml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +334,7 @@ func TestManifestMatchesSources(t *testing.T) {
 		}
 	}
 	// Пакет в исходниках совпадает с namespace сборки: иначе R не найдётся.
-	gradle, err := os.ReadFile(filepath.Join("..", "android", "app", "build.gradle.kts"))
+	gradle, err := readText(filepath.Join("..", "android", "app", "build.gradle.kts"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +387,7 @@ func kotlinFiles(t *testing.T) map[string]string {
 		if err != nil || info.IsDir() || filepath.Ext(path) != ".kt" {
 			return err
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := readText(path)
 		if err != nil {
 			return err
 		}
@@ -434,7 +435,7 @@ func TestResourceInventory(t *testing.T) {
 // ConnectivityManager.activeNetwork. Список — только то, что приложение
 // действительно зовёт; новый вызов такого рода — новая строка здесь.
 func TestPermissionsForAPIs(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(appDir, "AndroidManifest.xml"))
+	raw, err := readText(filepath.Join(appDir, "AndroidManifest.xml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,4 +470,12 @@ func TestPermissionsForAPIs(t *testing.T) {
 
 func stripXMLComments(s string) string {
 	return regexp.MustCompile(`(?s)<!--.*?-->`).ReplaceAllString(s, "")
+}
+
+// readText читает исходник с концами строк как в репозитории. Git для
+// Windows (и раннер GitHub) по умолчанию выдаёт файлы с CRLF, а проверки
+// ищут "\n" — без этого они видят чужие ошибки.
+func readText(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	return bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n")), err
 }

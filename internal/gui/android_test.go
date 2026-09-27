@@ -41,7 +41,8 @@ func TestAndroidResources(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v — пересоберите: go test ./internal/gui -run TestAndroidResources -update", name, err)
 		}
-		if string(got) != want {
+		// Git для Windows выдаёт файлы с CRLF — сравниваем содержимое, а не концы строк.
+		if strings.ReplaceAll(string(got), "\r\n", "\n") != want {
 			t.Errorf("%s разошёлся с палитрой окна — пересоберите: go test ./internal/gui -run TestAndroidResources -update", name)
 		}
 	}
