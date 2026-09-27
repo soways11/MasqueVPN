@@ -143,6 +143,7 @@ func buildBinaries(t *testing.T) string {
 // topology строит три namespace и удаляет их по завершении теста.
 func topology(t *testing.T) {
 	t.Helper()
+	hostResolvUntouched(t)
 	for _, ns := range []string{nsCli, nsSrv, nsInet} {
 		exec.Command("ip", "netns", "del", ns).Run()
 		sh(t, "ip", "netns", "add", ns)
@@ -221,9 +222,30 @@ func (p *proc) stop(t *testing.T) {
 	}
 }
 
+// isolateEtc — обёртка запуска: процесс получает свою копию /etc поверх
+// настоящей (overlayfs в отдельном пространстве монтирования).
+//
+// `ip netns exec` разделяет с хостом сеть — нет, а файловую систему — да.
+// Клиент в полном туннеле подменяет /etc/resolv.conf, и без обёртки он
+// подменял его ХОСТУ: на раннере GitHub это отрезало DNS самому агенту, и
+// задание обрывалось через час с «runner lost communication». Теперь
+// изменения /etc остаются внутри процесса и исчезают вместе с ним.
+const isolateEtc = `set -e
+d=$(mktemp -d)
+mount -t tmpfs none "$d"
+mkdir "$d/u" "$d/w"
+mount -t overlay overlay -o "lowerdir=/etc,upperdir=$d/u,workdir=$d/w" /etc
+exec "$0" "$@"`
+
 func start(t *testing.T, ns, name string, args ...string) *proc {
 	t.Helper()
 	p := &proc{name: name, done: make(chan struct{})}
+	// androidsim сам проверяет resolv.conf, который `ip netns exec` берёт из
+	// /etc/netns/<ns>/ (см. android_test.go); overlay его бы спрятал, а
+	// resolv.conf он не трогает.
+	if !strings.HasPrefix(name, "androidsim") {
+		args = append([]string{"unshare", "--mount", "--propagation", "private", "sh", "-c", isolateEtc}, args...)
+	}
 	p.cmd = exec.Command("ip", append([]string{"netns", "exec", ns}, args...)...)
 	p.cmd.Stdout, p.cmd.Stderr = p, p
 	if err := p.cmd.Start(); err != nil {
@@ -232,7 +254,10 @@ func start(t *testing.T, ns, name string, args ...string) *proc {
 	go func() { p.cmd.Wait(); close(p.done) }()
 	t.Cleanup(func() {
 		p.stop(t)
-		if t.Failed() || testing.Verbose() {
+		// Журналы процессов объёмные (log_level debug): при -v в CI они
+		// утопили бы строки === RUN, по которым видно, где стенд встал.
+		// Показываются при падении или по MASQUEVPN_E2E_LOGS=1.
+		if t.Failed() || os.Getenv("MASQUEVPN_E2E_LOGS") != "" {
 			t.Logf("---- журнал %s ----\n%s", name, p.Log())
 		}
 	})
@@ -1143,4 +1168,22 @@ func TestSurvivesBlockade(t *testing.T) {
 			before[1], last[1])
 	}
 	t.Logf("сессий всего %d, адрес сохранён: %s", len(opened), last[1])
+}
+
+// hostResolvUntouched проверяет после теста, что /etc/resolv.conf хоста
+// остался прежним: стенд не имеет права менять сеть машины, на которой
+// идёт (на раннере GitHub это обрывало связь агента с сервером).
+func hostResolvUntouched(t *testing.T) {
+	t.Helper()
+	snap := func() string {
+		target, _ := os.Readlink("/etc/resolv.conf")
+		raw, _ := os.ReadFile("/etc/resolv.conf")
+		return target + "\x00" + string(raw)
+	}
+	before := snap()
+	t.Cleanup(func() {
+		if after := snap(); after != before {
+			t.Errorf("стенд изменил /etc/resolv.conf хоста:\nбыло:\n%s\nстало:\n%s", before, after)
+		}
+	})
 }
