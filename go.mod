@@ -18,7 +18,7 @@ replace (
 require (
 	github.com/gaukas/clienthellod v0.4.2
 	github.com/google/nftables v0.3.0
-	github.com/jezek/xgb v1.1.1
+	github.com/jezek/xgb v1.3.1
 	github.com/quic-go/qpack v0.6.0
 	github.com/quic-go/quic-go v0.59.0
 	github.com/refraction-networking/uquic v0.0.6
@@ -26,6 +26,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	golang.org/x/crypto v0.41.0
 	golang.org/x/image v0.20.0
+	golang.org/x/net v0.43.0
 	golang.org/x/sys v0.35.0
 )
 
@@ -39,7 +40,6 @@ require (
 	github.com/mdlayher/socket v0.5.0 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/exp v0.0.0-20240416160154-fe59bbe5cc7f // indirect
-	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 )
