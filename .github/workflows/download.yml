@@ -1,0 +1,98 @@
+# Установщики опубликованного релиза — в папку download/ репозитория:
+#
+#   download/windows/masquevpn-setup.exe
+#   download/linux/masquevpn_amd64.deb, masquevpn_arm64.deb
+#   download/android/masquevpn.apk
+#
+# Срабатывает, когда релиз ОПУБЛИКОВАН (черновик не трогает): в репозиторий
+# попадает только то, что человек проверил и выпустил. Имена файлов без
+# версии — ссылки из README не устаревают; версия и контрольные суммы —
+# в download/README.md.
+#
+# Вручную для уже опубликованного релиза:  gh workflow run download.yml -f tag=v0.3.1
+name: Download folder
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег опубликованного релиза, например v0.3.1"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-folder
+  cancel-in-progress: false
+
+jobs:
+  files:
+    name: Установщики в download/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Файлы релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::тег «$TAG» не вида v1.2.3"; exit 1; }
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/dist" \
+            -p '*.exe' -p '*.deb' -p '*.apk'
+          ls -l "$RUNNER_TEMP/dist"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - name: Разложить по папкам
+        run: |
+          d="$RUNNER_TEMP/dist"
+          v="${TAG#v}"
+          put() { # put ПАПКА ИМЯ ФАЙЛЫ... — первый существующий из ФАЙЛОВ
+            dir=$1 name=$2; shift 2
+            [ -f "$1" ] || return 1
+            mkdir -p "download/$dir"
+            cp "$1" "download/$dir/$name"
+          }
+          # Старые файлы платформы заменяются, только если в релизе есть
+          # новые: релиз без APK не должен стирать прежний APK.
+          has() { [ -f "$1" ]; }
+          has "$d"/*.exe && rm -rf download/windows
+          has "$d"/*.deb && rm -rf download/linux
+          has "$d"/*.apk && rm -rf download/android
+          put windows masquevpn-setup.exe "$d"/masquevpn-setup-*.exe || true
+          put linux   masquevpn_amd64.deb "$d"/masquevpn_*_amd64.deb || true
+          put linux   masquevpn_arm64.deb "$d"/masquevpn_*_arm64.deb || true
+          put android masquevpn.apk       "$d"/*.apk                 || true
+
+          {
+            echo "# Установщики masquevpn $v"
+            echo
+            echo "Последний выпуск: [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)."
+            echo
+            echo "| система | файл | как поставить |"
+            echo "|---|---|---|"
+            [ -f download/windows/masquevpn-setup.exe ] && echo "| Windows 10/11 (x64) | [windows/masquevpn-setup.exe](windows/masquevpn-setup.exe) | запустить |"
+            [ -f download/linux/masquevpn_amd64.deb ] && echo "| Linux (Debian/Ubuntu, x64) | [linux/masquevpn_amd64.deb](linux/masquevpn_amd64.deb) | \`sudo apt install ./masquevpn_amd64.deb\` |"
+            [ -f download/linux/masquevpn_arm64.deb ] && echo "| Linux (ARM64) | [linux/masquevpn_arm64.deb](linux/masquevpn_arm64.deb) | \`sudo apt install ./masquevpn_arm64.deb\` |"
+            [ -f download/android/masquevpn.apk ] && echo "| Android 7.1+ | [android/masquevpn.apk](android/masquevpn.apk) | открыть файл на телефоне |"
+            echo
+            echo "Сервер для VPS и все файлы с версиями — на странице выпуска."
+            echo
+            echo "## SHA-256"
+            echo
+            echo '```'
+            (cd download && find windows linux android -type f 2>/dev/null | sort | xargs -r sha256sum)
+            echo '```'
+          } > download/README.md
+          cat download/README.md
+      - name: Коммит
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -f download
+          if git diff --cached --quiet; then echo "без изменений"; exit 0; fi
+          git commit -m "download: установщики ${TAG}"
+          git push origin HEAD:main
