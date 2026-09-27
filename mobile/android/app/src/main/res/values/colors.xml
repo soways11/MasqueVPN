@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    СГЕНЕРИРОВАНО из internal/gui (android.go) — руками не править.
+    Поменять цвет или размер: правка в internal/gui, затем
+        go test ./internal/gui -run TestAndroidResources -update
+-->
+<resources>
+    <color name="bg">#090F0C</color> <!-- фон окна -->
+    <color name="caption">#0D1512</color> <!-- полоса заголовка -->
+    <color name="caption_line">#18261F</color> <!-- черта под заголовком -->
+    <color name="surface">#0C1310</color> <!-- карточки и строки -->
+    <color name="surface2">#101713</color> <!-- блок цифр -->
+    <color name="tile">#0A130F</color> <!-- плитки и поля ввода -->
+    <color name="card_top">#0A1912</color> <!-- градиент карточки: верх -->
+    <color name="card_bot">#0A120E</color> <!-- градиент карточки: низ -->
+    <color name="border">#132D1E</color> <!-- рамка карточки -->
+    <color name="border_dim">#16201B</color> <!-- рамка строк -->
+    <color name="accent">#42D77B</color> <!-- зелёный акцент -->
+    <color name="accent_ink">#030C07</color> <!-- текст на акценте -->
+    <color name="accent_dim">#1D4630</color> <!-- обводка второстепенных кнопок -->
+    <color name="text">#F2F6F4</color> <!-- основной текст -->
+    <color name="dim">#78968F</color> <!-- подписи -->
+    <color name="muted">#4B5A53</color> <!-- служебное -->
+    <color name="bar">#2E9054</color> <!-- столбики графика -->
+    <color name="bar_dim">#0B2918</color> <!-- столбики вне истории -->
+    <color name="idle_dot">#4A5A52</color> <!-- индикатор без подключения -->
+    <color name="danger">#E0603F</color> <!-- ошибка -->
+    <color name="accent_pressed">#39B96A</color> <!-- акцентная кнопка нажата -->
+    <color name="surface_pressed">#1B211E</color> <!-- обведённая кнопка нажата -->
+    <color name="row_pressed">#181F1C</color> <!-- строка нажата -->
+    <color name="log_bg">#0E1411</color> <!-- фон журнала -->
+    <color name="toggle_off">#1E2521</color> <!-- дорожка выключенного переключателя -->
+    <color name="danger_line">#7B3523</color> <!-- обводка кнопки удаления -->
+    <color name="tile_border">#0C1D14</color> <!-- рамка плитки скорости -->
+    <color name="dot_busy">#469F69</color> <!-- индикатор при подключении и отключении (State.DotColor) -->
+    <color name="ripple">#252B28</color> <!-- волна нажатия: текст, почти растворённый в фоне -->
+</resources>

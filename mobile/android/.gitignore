@@ -1,0 +1,10 @@
+# Ключ подписи и пароли к нему — никогда не в репозиторий.
+keystore.properties
+*.jks
+*.keystore
+# Сборка.
+.gradle/
+build/
+app/build/
+app/libs/*.aar
+local.properties

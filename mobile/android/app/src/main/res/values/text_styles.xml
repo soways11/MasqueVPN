@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    СГЕНЕРИРОВАНО из internal/gui (android.go) — руками не править.
+    Поменять цвет или размер: правка в internal/gui, затем
+        go test ./internal/gui -run TestAndroidResources -update
+-->
+<resources>
+    <style name="TextAppearance.Masque.Title" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+    <style name="TextAppearance.Masque.Button" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_button</item>
+        <item name="android:textColor">@color/accent_ink</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+    <style name="TextAppearance.Masque.Row" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_row</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+    <style name="TextAppearance.Masque.Value" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_value</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+    <style name="TextAppearance.Masque.Number" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_number</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    <style name="TextAppearance.Masque.Small" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_small</item>
+        <item name="android:textColor">@color/dim</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+    <style name="TextAppearance.Masque.Label" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_label</item>
+        <item name="android:textColor">@color/dim</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:letterSpacing">0.16</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+    <style name="TextAppearance.Masque.Mono" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_mono</item>
+        <item name="android:textColor">@color/dim</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+    <style name="TextAppearance.Masque.Logo" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_logo</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.229</item>
+    </style>
+    <style name="TextAppearance.Masque.Footer" parent="@android:style/TextAppearance">
+        <item name="android:textSize">@dimen/text_footer</item>
+        <item name="android:textColor">@color/muted</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+</resources>

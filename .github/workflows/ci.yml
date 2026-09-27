@@ -1,0 +1,106 @@
+# Проверка каждой правки: код, сквозной стенд, Windows и сборка APK.
+#
+# Сквозной стенд (test/e2e) поднимает три network namespace и гоняет через
+# туннель настоящий трафик — ему нужен root. У раннеров GitHub sudo без
+# пароля, так что это единственное место, где путь «клиент → сервер →
+# интернет» проверяется на каждую правку.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: Проверка и тесты (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Поиск секретов (gitleaks)
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar xz gitleaks
+          ./gitleaks dir . --config .gitleaks.toml --no-banner --redact
+          rm -f gitleaks
+      - name: gofmt
+        run: |
+          out=$(git ls-files '*.go' | grep -v '^third_party/' | xargs gofmt -l)
+          if [ -n "$out" ]; then echo "не отформатировано gofmt:"; echo "$out"; exit 1; fi
+      - name: go vet (linux, windows)
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+          go vet -tags e2e ./test/e2e/...
+      - name: Тесты
+        run: go test ./...
+      - name: Тесты под race-детектором
+        run: go test -race ./...
+
+  e2e:
+    name: Сквозной стенд (root, netns)
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Стенд
+        run: sudo -E env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -tags e2e -count=1 -timeout 30m ./test/e2e/...
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Тесты
+        run: go test ./...
+      - name: Сборка окна и клиента
+        run: |
+          go build -tags utls -ldflags "-H=windowsgui" -o masquevpn.exe ./cmd/masquevpn-win
+          go build -tags utls -o masquevpn-cli.exe ./cmd/vpnclient
+
+  android:
+    name: Android (проверки и APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Gradle 8.11 / AGP 8.7 не работают на Java 22+.
+          java-version: "21"
+      - name: Статические проверки приложения
+        run: go test ./mobile/androidcheck/...
+      - name: Компоненты SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+      - name: APK (отладочный)
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          gobin="$(go env GOPATH)/bin"
+          export PATH="$PATH:$gobin"
+          sh mobile/build-apk.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: masquevpn-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7

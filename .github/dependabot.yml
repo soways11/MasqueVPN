@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    ignore:
+      # quic-go 0.60+ требует Go 1.26, а проект собирается на 1.24 — обновлять
+      # вместе с версией Go, отдельным осознанным шагом.
+      - dependency-name: github.com/quic-go/quic-go
+        versions: [">= 0.60.0"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: gradle
+    directory: /mobile/android
+    schedule: { interval: weekly }

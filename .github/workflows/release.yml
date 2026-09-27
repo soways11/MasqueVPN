@@ -1,0 +1,137 @@
+# Релиз по тегу: git tag v0.3.0 && git push --tags
+#
+# Собирает всё, что раздаётся людям, и кладёт в ЧЕРНОВИК релиза —
+# опубликовать его (или удалить) решает человек, посмотрев список файлов.
+#
+# Секреты (Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_B64      ключ подписи APK: base64 от masquevpn-release.jks
+#   ANDROID_KEYSTORE_PASSWORD пароль к нему (у PKCS12 он же пароль ключа)
+#   ANDROID_KEY_ALIAS         псевдоним ключа (make-keystore.ps1 ставит masquevpn)
+# Без них APK в релиз не попадёт — остальное соберётся.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия без v, например 0.3.0 (для проверочной сборки без тега)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then v="$INPUT_VERSION"
+          else v="${GITHUB_REF_NAME#v}"; fi
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "версия «$v» не вида 1.2.3"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    name: Windows, Linux, сервер
+    runs-on: ubuntu-latest
+    needs: version
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Инструменты
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis > /dev/null
+      - name: Установщик Windows
+        run: sh deploy/windows/build-installer.sh "$VERSION" dist
+      - name: Пакеты .deb
+        run: |
+          sh deploy/linux/build-deb.sh amd64 "$VERSION" dist
+          sh deploy/linux/build-deb.sh arm64 "$VERSION" dist
+      - name: Пакет для VPS
+        run: sh deploy/vps/build.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop
+          path: dist/*
+
+  android:
+    name: APK
+    runs-on: ubuntu-latest
+    needs: version
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Ключ подписи
+        if: env.KEYSTORE_B64 != ''
+        env:
+          KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          ks="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$ks"
+          {
+            echo "storeFile=$ks"
+            echo "storePassword=$KS_PASSWORD"
+            echo "keyAlias=${KS_ALIAS:-masquevpn}"
+            echo "keyPassword=$KS_PASSWORD"
+          } > mobile/android/keystore.properties
+      - name: Компоненты SDK
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" > /dev/null
+      - name: APK (релиз)
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          gobin="$(go env GOPATH)/bin"
+          export PATH="$PATH:$gobin"
+          # versionCode только растёт: номер запуска поверх тысячи — больше
+          # всех, что собирались вручную.
+          export GRADLE_ARGS="-PversionName=$VERSION -PversionCode=$((1000 + ${{ github.run_number }}))"
+          sh mobile/build-apk.sh --release
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/masquevpn-$VERSION.apk"
+          rm -f mobile/android/keystore.properties
+      - uses: actions/upload-artifact@v4
+        if: env.KEYSTORE_B64 != ''
+        with:
+          name: android
+          path: dist/*.apk
+
+  publish:
+    name: Черновик релиза
+    runs-on: ubuntu-latest
+    needs: [version, desktop, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Контрольные суммы
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Черновик
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "masquevpn ${{ needs.version.outputs.version }}" --generate-notes

@@ -1,0 +1,22 @@
+# Туннель без окна — постоянный VPN для Linux: поднимается при загрузке,
+# переподключается сам. Берёт выбранный профиль из /var/lib/masquevpn — тот
+# же, что показывает окно.
+#
+#   sudo systemctl enable --now masquevpn-client
+#
+# Не включайте её одновременно с работающим окном: два туннеля на одной
+# машине будут спорить за маршруты и DNS.
+[Unit]
+Description=masquevpn (MASQUE CONNECT-IP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/lib/masquevpn/masquevpn-cli
+# Если клиент упал, не оставить машину с подменённым DNS и маршрутами.
+ExecStopPost=/usr/lib/masquevpn/masquevpn-cli -cleanup
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,111 @@
+{
+  "source": "Chrome 153, Windows 11 (снят fpcapture; ECH удалён — его режет DPI)",
+  "captured_at": "2026-09-24T03:48:17Z",
+  "datagram_size": 1250,
+  "src_conn_id_len": 0,
+  "dest_conn_id_len": 8,
+  "packet_number_len": 1,
+  "init_packet_number": 1,
+  "cipher_suites": [
+    4865,
+    4866,
+    4867
+  ],
+  "extensions": [
+    {
+      "id": 0
+    },
+    {
+      "id": 51,
+      "data": "BOgR7ATA/UegCDU0xJkdQawKyLsXbXcPGgRfQoJBIVXMCzMqzKqsl/CUf7W4FUl+fdI9JTwWyAN/+rcVqLkqsphTaNZUiCairxlAYuFgnolM5XCpo9CJ8ZQZSWawruVKkvpmrXhkleI3X6wgqrLNBOOOSOLN8yXBCqWjCqYXKHt7zgd2QkVU2MyKRvEZ32ECLNJ/x4UZiqxVWns9AolZBoEKXlKsN9myi4g4SLYCNyWUxnvHh+d3dht16LSnNvvOQtEllutiTYUQ+uROBlkzUlOvCoVUSKUMZlaMJsM+ZWk6GmBbUadFVCAPycON6/eqffSmVkF46ehitOhV0VoYi/wjcfAqE4c/j5pK/1SC30kYCePPECBmfnuSTUmXBQlvNGMrC9ZTq0ZbXCe94bOpQIptQ5OCZHtRBgU6ynu1V0dIxRoa3GdioXp4gXB5IxKBP+iu8UdZiiUv79mwm+tDc9MH6sGW3qNUf1K5FZJwO+WX9ooZMPU6fWUNqkawvUlYWfJ5Qfs+buNiaMAMnRdAfKazSPx3rZqQ0uIdFwkgW2MmLxKHojlK15x5cQEWxTGm2Yy6JxBAsDQ4YWml3qwD9nu2TaqoipuN/su7fAAcKdlZW/PPHupmZCeBYiA/ZHui5RFW0hlOMGRQi9tO0BRmgJO6oSXKZ3hZwzkcfMtzZka5XRRVihJi5uoJXkiYcIJpqMhzi1ix3vrNnuUmeRpNNazPGCfKsLWongoNiWEHQmmiKWHHOqALFiRnNyMJF/vApErLhbh/C2mrI3cw4AhtsAetYEhw/VirLfNnZckxRdcYKfNMJreWxZa6koXLrUgK75Si69t1ZcklNugRtkdn2gUb3jU1qBQcAZMfJdgyU2li6XS1b+Mnxvk7w7V/D/JPLrOkxLHBsZU31uw1AXZFAYmL0JW/PtBSJIaGt3GHj8BzGKgsHYmaBgCYYCKWjMHJy4tw9KVpCTp1C3OU1roO7uktx1MF1EwkXBdcWgGs2rKgMnB94HNwtiVSDFyegjPPAAY/JmxtJ6SDliKPJKRNjTlfOMKdLeIVYoSeKBOfp6m5QYI/2rC8PheXk6aiTAVn54pwTYhgQmMdXcBTorVKQzgm49Ug5bKVASLDL6kJCxlqMFaeyfXENOg2zBS6RPistgR+fKFPK3yBupyGtyaX0dkGLFAIMuQn9HlWBKh5rxovFSSkXeFyHPsHEcAISrYRvqaL3IZKIFVLOCUcMcMY/PCdZwOPWrsZ8UdEFHHIt5ysdCgDz8R1x5xzGLuHyJicoppEWbaMdAiIl/QQZcINUWbHdISbyeYZj3US9LNP9vHOvtW8YXB7bZbOJjBFKqgcTJgkM/FV6lovDbDLoPTD76aujWYnQ4E9QxKPbnUC0vDCitu9qtCLg1N9MHtmqacN0vgrWNV+PIx9sfqOqnEb7gANoGZ5bIMQl5B5jKC316lhH3MmnScw/5bEDijGpbc2o6O+64ll1omS8GV78ZNiTUw0XFYdCMlqb1ako4nBOYtgTTiskMOFZPd42cobEZWp9YxfUURu95w7tbaZxZSeoTKsK7SARd8Pv+39WDC+TCniMnwrRY6C/rPtsyTr8nLvPVhVlQ2ShvQyY1KX1KXHucxdSyOELQAdACAokhtPQ9r296lwT3y36ezBP2Dzlgeqq/3c0QLHQfZDCw=="
+    },
+    {
+      "id": 16,
+      "data": "AAMCaDM="
+    },
+    {
+      "id": 13,
+      "data": "ABIEAwgEBAEFAwgFBQEIBgYBAgE="
+    },
+    {
+      "id": 45,
+      "data": "AQE="
+    },
+    {
+      "id": 10,
+      "data": "AAgR7AAdABcAGA=="
+    },
+    {
+      "id": 51764,
+      "data": "ALgFgt8TAgEFgt8TAgYFgt8TAg0Fgt8TAg4Fgt8TAg8Fgt8TAhIFgt8TAhMFgt8TAhQIg5pkjJstAQcIg5pkjJstAQgIg5pkjJstAQkIg5pkjJstAQoIg5pkjJstAQsIg5pkjJstAQwIg5pkjJstAQ0Ig5pkjJstARIIg5pkjJstARME1nkJAQTWeQkEBNZ5CQUE1nkJBgTWeQkHBNZ5CQgE1nkJCgTWeQkLBNZ5CQwE1nkJDQTWeQkP"
+    },
+    {
+      "id": 17613,
+      "data": "AAMCaDM="
+    },
+    {
+      "id": 57,
+      "data": "BgSAYAAAEQwAAAABAAAAARqayjoPAHEoBE9SSUcBBIAAdTAJAkBnBASA8AAABQSAYAAABwSAYAAA8n8I8tUaMMYAAwJFwAgCQGQgBIABAAA="
+    },
+    {
+      "id": 43,
+      "data": "AgME"
+    },
+    {
+      "id": 27,
+      "data": "AgAC"
+    }
+  ],
+  "transport_params": [
+    {
+      "id": 6,
+      "value": "gGAAAA=="
+    },
+    {
+      "id": 17,
+      "value": "AAAAAQAAAAEamso6"
+    },
+    {
+      "id": 15
+    },
+    {
+      "id": 12584,
+      "value": "T1JJRw=="
+    },
+    {
+      "id": 1,
+      "value": "gAB1MA=="
+    },
+    {
+      "id": 9,
+      "value": "QGc="
+    },
+    {
+      "id": 4,
+      "value": "gPAAAA=="
+    },
+    {
+      "id": 5,
+      "value": "gGAAAA=="
+    },
+    {
+      "id": 7,
+      "value": "gGAAAA=="
+    },
+    {
+      "id": 3638636862989021382
+    },
+    {
+      "id": 3,
+      "value": "RcA="
+    },
+    {
+      "id": 8,
+      "value": "QGQ="
+    },
+    {
+      "id": 32,
+      "value": "gAEAAA=="
+    }
+  ]
+}

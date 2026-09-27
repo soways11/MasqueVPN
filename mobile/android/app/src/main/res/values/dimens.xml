@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    СГЕНЕРИРОВАНО из internal/gui (android.go) — руками не править.
+    Поменять цвет или размер: правка в internal/gui, затем
+        go test ./internal/gui -run TestAndroidResources -update
+-->
+<resources>
+    <dimen name="pad_x">24dp</dimen> <!-- поля слева и справа -->
+    <dimen name="radius">14dp</dimen> <!-- скругление карточек -->
+    <dimen name="radius_sm">12dp</dimen> <!-- скругление строк и полей -->
+    <dimen name="row_h">52dp</dimen> <!-- высота строки списка -->
+    <dimen name="row_gap">8dp</dimen> <!-- между строками -->
+    <dimen name="row_pad">15dp</dimen> <!-- внутренний отступ строки (Inset(15) в paint.go) -->
+    <dimen name="button_h">48dp</dimen> <!-- главная кнопка -->
+    <dimen name="tile_h">54dp</dimen> <!-- плитка скорости -->
+    <dimen name="tile_gap">10dp</dimen> <!-- между плитками -->
+    <dimen name="icon_button">36dp</dimen> <!-- кнопки «+» и настроек: в окне 30, пальцу мало -->
+    <dimen name="icon_radius">8dp</dimen> <!-- скругление кнопок-значков -->
+    <dimen name="field_h">48dp</dimen> <!-- поле ввода -->
+    <dimen name="dot">6dp</dimen> <!-- индикатор состояния -->
+    <dimen name="section_line">22dp</dimen> <!-- тире перед меткой раздела -->
+    <dimen name="logo_mark">32dp</dimen> <!-- знак-черепаха в шапке -->
+    <dimen name="text_title">18.5sp</dimen> <!-- заголовок экрана -->
+    <dimen name="text_button">17.5sp</dimen> <!-- надпись на кнопке -->
+    <dimen name="text_row">15sp</dimen> <!-- строки списков -->
+    <dimen name="text_value">16sp</dimen> <!-- числа в плитках -->
+    <dimen name="text_number">17.5sp</dimen> <!-- крупные цифры -->
+    <dimen name="text_small">12.5sp</dimen> <!-- пояснения -->
+    <dimen name="text_label">11.5sp</dimen> <!-- мелкие заглавные метки -->
+    <dimen name="text_mono">13.5sp</dimen> <!-- журнал: строки длинные, чуть мельче -->
+    <dimen name="text_logo">16sp</dimen> <!-- логотип -->
+    <dimen name="text_footer">11.5sp</dimen> <!-- подпись внизу -->
+</resources>

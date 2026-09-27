@@ -1,0 +1,36 @@
+{
+  "listen": ":443",
+  "acme": {
+    "domains": ["vpn.example.com"],
+    "email": "admin@example.com",
+    "cache_dir": "/var/lib/masquevpn/acme"
+  },
+  "cert_file": "/etc/masquevpn/fullchain.pem",
+  "key_file": "/etc/masquevpn/privkey.pem",
+  "clients_file": "/etc/masquevpn/clients.json",
+
+  "tun": { "name": "masquevpn0", "mtu": 1280 },
+  "pool4": "10.66.0.0/24",
+  "pool6": "fd66:6f76:706e::/64",
+
+  "nat": { "out_interface": "" },
+  "shaping": "cloud-gaming-down",
+  "packing": { "window": "300us" },
+  "server_profile": "cloudflare",
+  "fallback_proxy": "http://127.0.0.1:8080",
+  "fallback_site": {
+    "title": "Nimbus Lab",
+    "description": "Realtime delivery for applications that cannot wait.",
+    "contact": "hello@example.com"
+  },
+  "tcp": { "listen": ":443" },
+
+  "limits": {
+    "max_sessions": 256,
+    "max_sessions_per_ip": 8,
+    "idle_timeout": "10m",
+    "max_unknown_capsules": 64,
+    "max_bytes_per_second": 0
+  },
+  "log_level": "info"
+}

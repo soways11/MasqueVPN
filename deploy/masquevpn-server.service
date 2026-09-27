@@ -1,0 +1,13 @@
+[Unit]
+Description=masquevpn server (MASQUE CONNECT-IP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/vpnserver -config /etc/masquevpn/server.json
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

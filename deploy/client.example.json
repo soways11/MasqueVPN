@@ -1,0 +1,21 @@
+{
+  "server": "vpn.example.com:443",
+  "auth_key": "ВСТАВЬТЕ_ВЫВОД_vpnserver_genkey",
+
+  "transport": "utls",
+  "protocol": "webtransport",
+
+  "tun": { "name": "masquevpn0", "mtu": 1280 },
+  "full_tunnel": true,
+  "ipv6": true,
+  "dns": ["1.1.1.1", "2606:4700:4700::1111"],
+  "kill_switch_allow": [],
+
+  "shaping": "cloud-gaming-up",
+  "packing": { "window": "300us", "pace": "none" },
+  "dns_cover": { "mean_interval": "45s" },
+  "cover_browsing": { "paths": ["/", "/index.html"], "mean_interval": "20s" },
+  "rotation": { "every": "30m", "keep_address": true },
+
+  "log_level": "info"
+}

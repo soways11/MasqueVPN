@@ -1,0 +1,24 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: "Go Build"
+
+# on: [push, pull_request]
+on: push # no need to double-run on PR if we are running on all pushes already
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ "ubuntu-latest", "windows-latest", "macos-latest" ]
+        go: [ "1.21.x", "1.22.x" ]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go }}
+    - run: go version
+    - name: Build
+      run: go build -v ./...

@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Тема приложения. Цвета — только ссылками на colors.xml (он генерируется
+    из палитры окон), ни одного числа здесь: иначе телефон разошёлся бы с
+    окнами при первой правке палитры.
+
+    Основа — Theme.Material без AppCompat: приложению из трёх экранов
+    библиотека AndroidX не даёт ничего, кроме лишней зависимости, которую
+    первая сборка обязана скачать и может не скачать.
+-->
+<resources>
+
+    <style name="Theme.Masque" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <!--
+            Системные полосы в цвет окна. На Android 15 приложение и так
+            рисуется под ними (edge-to-edge), поэтому корневые разметки
+            помечены fitsSystemWindows — отступ под полосы даёт система.
+        -->
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+
+        <item name="android:colorPrimary">@color/bg</item>
+        <item name="android:colorPrimaryDark">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorControlNormal">@color/dim</item>
+        <item name="android:colorControlActivated">@color/accent</item>
+        <item name="android:colorControlHighlight">@color/ripple</item>
+
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/dim</item>
+        <item name="android:textColorHint">@color/muted</item>
+        <item name="android:textColorHighlight">@color/accent_dim</item>
+
+        <item name="android:alertDialogTheme">@style/Theme.Masque.Dialog</item>
+        <item name="android:popupMenuStyle">@style/Masque.PopupMenu</item>
+    </style>
+
+    <!-- Диалоги (переименование, удаление) — той же поверхностью, что строки. -->
+    <style name="Theme.Masque.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+        <item name="android:colorBackground">@color/surface</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorControlNormal">@color/dim</item>
+        <item name="android:colorControlActivated">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/dim</item>
+        <item name="android:textColorHint">@color/muted</item>
+    </style>
+
+    <style name="Masque.PopupMenu" parent="@android:style/Widget.Material.PopupMenu">
+        <item name="android:popupBackground">@drawable/bg_menu</item>
+    </style>
+
+    <!-- ===== Составные элементы ===== -->
+
+    <!-- Метка раздела: зелёное тире и заглавные буквы, как в окне. -->
+    <style name="Masque.SectionLabel" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textAppearance">@style/TextAppearance.Masque.Label</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:layout_marginStart">10dp</item>
+    </style>
+
+    <!-- Строка списка или настройки: карточка на всю ширину. -->
+    <style name="Masque.Row" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">@dimen/row_h</item>
+        <item name="android:background">@drawable/bg_row</item>
+        <item name="android:paddingStart">@dimen/row_pad</item>
+        <item name="android:paddingEnd">@dimen/row_pad</item>
+        <item name="android:paddingTop">11dp</item>
+        <item name="android:paddingBottom">11dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <!-- Кнопка-значок («+», настройки, назад). -->
+    <style name="Masque.IconButton" parent="">
+        <item name="android:layout_width">@dimen/icon_button</item>
+        <item name="android:layout_height">@dimen/icon_button</item>
+        <item name="android:background">@drawable/bg_icon_button</item>
+        <item name="android:scaleType">center</item>
+    </style>
+
+    <!-- Поле ввода формы «добавить сервер». -->
+    <style name="Masque.Field" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">@dimen/field_h</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Masque.Row</item>
+        <item name="android:textColorHint">@color/muted</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:importantForAutofill">no</item>
+    </style>
+
+    <!-- Заглавная кнопка экрана: таблетка во всю ширину. -->
+    <style name="Masque.PrimaryButton" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">@dimen/button_h</item>
+        <item name="android:background">@drawable/bg_button_accent</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <!-- Второстепенная кнопка: обведённая таблетка. -->
+    <style name="Masque.SecondaryButton" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">@dimen/button_h</item>
+        <item name="android:minWidth">200dp</item>
+        <item name="android:background">@drawable/bg_button_outline</item>
+        <item name="android:textAppearance">@style/TextAppearance.Masque.Row</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:paddingStart">24dp</item>
+        <item name="android:paddingEnd">24dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+</resources>

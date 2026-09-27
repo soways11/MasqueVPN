@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=masquevpn
+GenericName=VPN
+GenericName[ru]=VPN
+Comment=VPN on MASQUE (CONNECT-IP over HTTP/3)
+Comment[ru]=VPN на MASQUE (CONNECT-IP поверх HTTP/3)
+Exec=masquevpn
+Icon=masquevpn
+Terminal=false
+Categories=Network;
+Keywords=vpn;masque;
+StartupNotify=false
+StartupWMClass=masquevpn

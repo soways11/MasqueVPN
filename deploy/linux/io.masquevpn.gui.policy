@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+    Разрешение pkexec запускать окно masquevpn.
+
+    exec.path — ровно эта программа, а не «что угодно от root».
+    exec.allow_gui — pkexec сохраняет DISPLAY и XAUTHORITY: без этого окно
+    от root не смогло бы подключиться к экрану пользователя.
+    auth_admin_keep — пароль спрашивается, но после ввода система помнит
+    его несколько минут: повторный запуск сразу после закрытия не пристаёт.
+-->
+<policyconfig>
+  <vendor>masquevpn</vendor>
+  <action id="io.masquevpn.gui">
+    <description>Run masquevpn</description>
+    <description xml:lang="ru">Запуск masquevpn</description>
+    <message>Authentication is required to manage the VPN tunnel</message>
+    <message xml:lang="ru">Чтобы управлять VPN-туннелем, нужны права администратора</message>
+    <icon_name>masquevpn</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/masquevpn/masquevpn-gui</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

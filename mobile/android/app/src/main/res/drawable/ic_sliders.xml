@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Настройки: две полоски с бегунками — как drawSliders в окне. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp" android:height="20dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:strokeColor="@color/dim" android:strokeWidth="1.4"
+        android:strokeLineCap="round" android:pathData="M4,8 L20,8 M4,16 L20,16" />
+    <path android:fillColor="@color/accent"
+        android:pathData="M14.5,8 m-2.6,0 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
+    <path android:fillColor="@color/accent"
+        android:pathData="M9.5,16 m-2.6,0 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
+</vector>

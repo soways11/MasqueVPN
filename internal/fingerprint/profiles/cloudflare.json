@@ -1,0 +1,11 @@
+{
+  "source": "www.cloudflare.com:443 (снято fpserver 2026-09-24)",
+  "captured_at": "2026-09-24T15:55:30Z",
+  "max_idle_timeout_ms": 180000,
+  "initial_max_data": 10000000,
+  "initial_max_stream_data": 1000000,
+  "initial_max_streams_bidi": 100,
+  "initial_max_streams_uni": 3,
+  "initial_packet_size": 1350,
+  "connection_id_length": 8
+}

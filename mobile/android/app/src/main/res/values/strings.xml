@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Тексты — те же, что в окнах Windows и Linux (internal/gui): человек,
+    переставший различать два клиента, и есть цель. Меняя здесь, поменяйте и
+    там — или наоборот.
+-->
+<resources>
+    <string name="app_name">masquevpn</string>
+    <string name="wordmark">MASQUEVPN</string>
+    <string name="footer">masquevpn · MASQUE CONNECT-IP</string>
+
+    <!-- Состояние (gui.State.Status) -->
+    <string name="state_off">Нет подключения</string>
+    <string name="state_connecting">Подключение</string>
+    <string name="state_on">Соединение защищено</string>
+    <string name="state_stopping">Отключение</string>
+    <string name="state_failed">Не подключилось</string>
+
+    <!-- Главная кнопка (gui.State.Button) -->
+    <string name="connect">Подключиться</string>
+    <string name="disconnect">Отключить</string>
+    <string name="cancel">Отмена</string>
+    <string name="stopping">Отключение…</string>
+
+    <string name="rate_down">↓ Загрузка</string>
+    <string name="rate_up">↑ Отдача</string>
+    <string name="received">Принято</string>
+    <string name="sent">Отправлено</string>
+    <string name="session">Сессия</string>
+    <string name="zero_rate">0 бит/с</string>
+    <string name="zero_bytes">0 Б</string>
+    <string name="zero_time">00:00</string>
+
+    <string name="profiles">Профили</string>
+    <string name="add_server">Добавить сервер</string>
+    <string name="add_server_plus">+  Добавить сервер</string>
+    <string name="add_server_hint">Вставить ссылку masquevpn:// или конфигурацию</string>
+    <string name="edit_server">Изменить сервер</string>
+    <string name="settings">Настройки</string>
+    <string name="back">Назад</string>
+    <string name="profile_menu">Действия с профилем</string>
+
+    <string name="log">Журнал</string>
+    <string name="log_empty">пусто</string>
+    <plurals name="log_records">
+        <item quantity="one">%d запись</item>
+        <item quantity="few">%d записи</item>
+        <item quantity="many">%d записей</item>
+        <item quantity="other">%d записи</item>
+    </plurals>
+    <string name="log_last">%1$s, последняя %2$s</string>
+
+    <!-- Меню профиля — как в окне -->
+    <string name="menu_use">Сделать выбранным</string>
+    <string name="menu_rename">Переименовать</string>
+    <string name="menu_edit">Изменить</string>
+    <string name="menu_copy_link">Скопировать ссылку masquevpn://</string>
+    <string name="menu_remove">Удалить профиль</string>
+
+    <string name="rename_title">Переименовать профиль</string>
+    <string name="remove_title">Удалить профиль «%1$s»?</string>
+    <string name="remove_message">Ключ доступа удалится с телефона. Вернуть профиль можно только ссылкой заново.</string>
+    <string name="remove">Удалить</string>
+    <string name="save">Сохранить</string>
+    <string name="dismiss">Отмена</string>
+
+    <string name="link_copied">Ссылка скопирована. В ней ключ доступа — пересылайте только себе.</string>
+    <string name="switch_while_on">Сначала отключитесь — профиль меняется при выключенном туннеле</string>
+    <string name="remove_while_on">Профиль подключён — сначала отключитесь</string>
+    <string name="no_profiles">Сначала добавьте сервер — кнопка «+» вверху</string>
+    <string name="vpn_denied">Без разрешения на VPN туннель не поднять</string>
+
+    <!-- Форма (gui.AddFieldTitles и подсказки окна) -->
+    <string name="field_server">Адрес сервера</string>
+    <string name="field_key">Ключ доступа</string>
+    <string name="field_client_id">Идентификатор клиента</string>
+    <string name="field_name">Имя профиля</string>
+    <string name="hint_server">vpn.example.com:443</string>
+    <string name="hint_key">ключ из clients add</string>
+    <string name="hint_client_id">66bbb6180401ba34</string>
+    <string name="hint_name">необязательно — иначе домен сервера</string>
+    <string name="paste">Вставить из буфера</string>
+    <string name="add">Добавить</string>
+    <string name="delete_profile">Удалить профиль</string>
+    <string name="add_notice">Эти три значения выдаёт сервер командой clients add. Можно вставить ссылку — она разложится по полям.</string>
+    <string name="edit_notice">Изменения применятся при следующем подключении.</string>
+    <string name="pasted_notice">Значения из буфера — проверьте адрес сервера и нажмите «Добавить».</string>
+    <string name="clipboard_empty">В буфере обмена пусто — скопируйте ссылку и нажмите ещё раз.</string>
+
+    <!-- Настройки -->
+    <string name="section_protection">Защита</string>
+    <string name="kill_switch">Аварийное отключение</string>
+    <string name="kill_switch_hint">На Android его включает система: «Постоянный VPN» и «Блокировать соединения без VPN»</string>
+    <string name="open">Открыть</string>
+    <string name="section_about">Устройство</string>
+    <string name="device_id">Псевдоним устройства</string>
+    <string name="version">Версия</string>
+
+    <!-- Уведомление -->
+    <string name="notify_channel">Туннель</string>
+    <string name="notify_connecting">Подключение…</string>
+    <string name="notify_on">Соединение защищено · %1$s</string>
+    <string name="notify_off">Нет подключения</string>
+</resources>

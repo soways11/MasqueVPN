@@ -1,0 +1,48 @@
+# ---- сборки ----
+/dist/
+/deploy/windows/build/
+*.exe
+!/deploy/windows/**/*.exe
+/masquevpn-gui
+/masquevpn-cli
+/vpnserver*
+/vpnclient*
+
+# ---- ключи и доступы: никогда в репозиторий ----
+# Реестр клиентов с ключами всех клиентов, профили, выданные ссылки.
+clients.json
+clients.json.*
+profiles.json
+client.json
+client-*.json
+*.link
+device.id
+*.backup.json
+*-backup-*.tar.gz
+# Ключ подписи APK и пароль к нему.
+*.jks
+*.keystore
+keystore.properties
+# Сертификаты и закрытые ключи серверов.
+*.pem
+*.key
+!third_party/**/testdata/*.pem
+!third_party/**/testdata/*.key
+
+# ---- Android ----
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/local.properties
+mobile/android/app/libs/*.aar
+mobile/android/app/libs/*-sources.jar
+
+# ---- выход тестов (перерисовывается при каждом прогоне) ----
+internal/gui/testdata/*.svg
+internal/guiraster/testdata/*.png
+
+# ---- прочее ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

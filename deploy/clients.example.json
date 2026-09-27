@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "clients": [
+    {
+      "id": "1a2b3c4d5e6f7a8b",
+      "name": "Ноутбук",
+      "key": "ЗДЕСЬ_БУДЕТ_КЛЮЧ_ВЫДАННЫЙ_КОМАНДОЙ_CLIENTS_ADD=",
+      "quota": 200000000000,
+      "period": "month",
+      "max_sessions": 4,
+      "created": "2026-09-18T00:00:00Z"
+    }
+  ]
+}

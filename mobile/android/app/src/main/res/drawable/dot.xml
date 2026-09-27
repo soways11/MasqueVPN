@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Индикатор-точка. Цвет задаётся в коде (backgroundTint) по состоянию. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/idle_dot" />
+    <size android:width="@dimen/dot" android:height="@dimen/dot" />
+</shape>

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Запуск окна masquevpn.
+#
+# Туннелю нужны права администратора: создать сетевой интерфейс, поменять
+# маршруты и DNS. Поэтому окно запускается через pkexec — система спросит
+# пароль в своём окне, как UAC в Windows. Правило, разрешающее pkexec
+# запускать именно эту программу и именно с графикой, лежит в
+# /usr/share/polkit-1/actions/io.masquevpn.gui.policy.
+#
+# Уже root (sudo masquevpn, или запуск из службы) — сразу, без вопросов.
+set -e
+gui=/usr/lib/masquevpn/masquevpn-gui
+
+if [ "$(id -u)" -eq 0 ]; then
+    exec "$gui" "$@"
+fi
+if command -v pkexec >/dev/null 2>&1; then
+    exec pkexec "$gui" "$@"
+fi
+echo "masquevpn: нужен pkexec (пакет pkexec или policykit-1) или запуск через sudo" >&2
+exit 1

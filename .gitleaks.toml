@@ -1,0 +1,20 @@
+# Настройка gitleaks (поиск секретов):  gitleaks dir . --config .gitleaks.toml
+#
+# Исключения — только заведомо не секреты. Настоящий ключ, случайно
+# попавший в код, должен находиться, поэтому исключения узкие.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "тестовые данные, не секреты"
+paths = [
+  # Тестовый ключ и сертификаты самой библиотеки uquic (публичные, из апстрима).
+  '''third_party/uquic/internal/testdata/''',
+  # Имена меток HKDF в коде QUIC — не ключи, а строки протокола.
+  '''third_party/uquic/internal/handshake/''',
+]
+regexes = [
+  # Синтетические тестовые ключи: байты 1..32 и 32..1 в base64.
+  '''AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=''',
+  '''IB8eHRwbGhkYFxYVFBMSERAPDg0MCwoJCAcGBQQDAgE=''',
+]
