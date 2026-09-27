@@ -86,12 +86,25 @@ jobs:
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           ks="$RUNNER_TEMP/release.jks"
-          printf '%s' "$KEYSTORE_B64" | base64 -d > "$ks"
+          alias="${KS_ALIAS:-masquevpn}"
+          # Секрет, записанный из PowerShell, приходит с \r\n в конце, а
+          # base64 -d на \r спотыкается — пробелы и переводы строк убрать.
+          printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > "$ks" \
+            || { echo "::error::ANDROID_KEYSTORE_B64 — не base64 от .jks"; exit 1; }
+          # Пароль и псевдоним проверить до сборки: иначе Gradle падает
+          # через несколько минут с невнятной ошибкой подписи.
+          if ! keytool -list -keystore "$ks" -storepass:env KS_PASSWORD -alias "$alias" > /dev/null 2>&1; then
+            echo "::error::ключ не открылся: неверный ANDROID_KEYSTORE_PASSWORD или ANDROID_KEY_ALIAS ($alias)"
+            keytool -list -keystore "$ks" -storepass:env KS_PASSWORD 2>&1 | sed 's/^/    /' | head -5
+            exit 1
+          fi
+          # В .properties обратная косая черта — начало escape: удвоить.
+          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
           {
             echo "storeFile=$ks"
-            echo "storePassword=$KS_PASSWORD"
-            echo "keyAlias=${KS_ALIAS:-masquevpn}"
-            echo "keyPassword=$KS_PASSWORD"
+            echo "storePassword=$(esc "$KS_PASSWORD")"
+            echo "keyAlias=$alias"
+            echo "keyPassword=$(esc "$KS_PASSWORD")"
           } > mobile/android/keystore.properties
       - name: Компоненты SDK
         if: env.KEYSTORE_B64 != ''
