@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -50,10 +54,26 @@ var linkRe = regexp.MustCompile(`(?:href|src)="([^"]+)"`)
 
 // TestSiteHasNoDeadLinks — главная проверка правдоподобия: по сайту можно
 // ходить. Домен, где половина ссылок ведёт в 404, а favicon отсутствует,
-// выглядит брошенным — а именно этого мы и избегаем.
+// выглядит брошенным — а именно этого мы и избегаем. Проверяется каждая
+// легенда и каждое место раздела о статусе в документации.
 func TestSiteHasNoDeadLinks(t *testing.T) {
-	s := newTestSite(t, Options{Host: "nimbus-lab.io"})
+	for i := range legends {
+		for pos := 0; pos <= len(legends[i].docs); pos++ {
+			v := variantFor(fmt.Sprintf("seed-%d-%d", i, pos))
+			v.legend = &legends[i]
+			v.healthPos = pos
+			s, err := build(Options{Host: "quiet-river.io", Built: time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)}, v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Run(fmt.Sprintf("legend%d/health%d", i, pos), func(t *testing.T) {
+				checkNoDeadLinks(t, s, v)
+			})
+		}
+	}
+}
 
+func checkNoDeadLinks(t *testing.T, s *Site, v variant) {
 	seen := map[string]bool{}
 	queue := []string{"/"}
 	pages := 0
@@ -72,11 +92,17 @@ func TestSiteHasNoDeadLinks(t *testing.T) {
 			continue
 		}
 		if rsp.Header.Get("Content-Type") == "" ||
-			(p != statusPath && rsp.Header.Get("ETag") == "") {
+			(p != s.FeedPath() && rsp.Header.Get("ETag") == "") {
 			t.Errorf("%s: заголовки %v", p, rsp.Header)
+		}
+		if strings.HasSuffix(p, ".js") && !bytes.Contains(body, []byte(`"`+s.FeedPath()+`"`)) {
+			t.Errorf("скрипт опрашивает не тот фид: %s", body)
 		}
 		if !strings.HasPrefix(rsp.Header.Get("Content-Type"), "text/html") {
 			continue
+		}
+		if bytes.Contains(body, []byte("{{")) || bytes.Contains(body, []byte("$")) {
+			t.Errorf("%s: неподставленный шаблон", p)
 		}
 		pages++
 		for _, m := range linkRe.FindAllSubmatch(body, -1) {
@@ -90,22 +116,31 @@ func TestSiteHasNoDeadLinks(t *testing.T) {
 		t.Fatalf("страниц всего %d — на сайт из одной страницы это не похоже", pages)
 	}
 	// robots.txt на страницы не выносят — его проверяем отдельно, ниже.
-	for _, must := range []string{"/", "/docs", "/status", "/favicon.ico", statusPath} {
+	for _, must := range []string{"/", v.docsPath, "/status", "/favicon.ico", v.feedPath} {
 		if !seen[must] {
 			t.Errorf("%s не встретился при обходе", must)
 		}
 	}
-	// robots.txt обещает карту сайта — она должна быть.
+	// robots.txt обещает карту сайта — она должна быть, и в ней — реальные страницы.
 	robots := string(bodyOf(t, get(t, s, http.MethodGet, "/robots.txt", nil)))
-	if !strings.Contains(robots, "nimbus-lab.io/sitemap.xml") {
+	if !strings.Contains(robots, "quiet-river.io/sitemap.xml") {
 		t.Fatalf("robots.txt: %q", robots)
 	}
-	if rsp := get(t, s, http.MethodGet, "/sitemap.xml", nil); rsp.StatusCode != http.StatusOK {
-		t.Fatalf("sitemap.xml: статус %d", rsp.StatusCode)
+	sm := get(t, s, http.MethodGet, "/sitemap.xml", nil)
+	if sb := bodyOf(t, sm); sm.StatusCode != http.StatusOK || !bytes.Contains(sb, []byte(v.docsPath+"</loc>")) {
+		t.Fatalf("sitemap.xml: статус %d, %s", sm.StatusCode, sb)
 	}
 	if ico := bodyOf(t, get(t, s, http.MethodGet, "/favicon.ico", nil)); len(ico) < 100 ||
 		!bytes.HasPrefix(ico, []byte{0, 0, 1, 0}) {
 		t.Fatalf("favicon.ico длиной %d не похож на ICO", len(ico))
+	}
+	// Страница статуса показывает те компоненты, о которых говорит легенда.
+	var doc statusDoc
+	if err := json.Unmarshal(bodyOf(t, get(t, s, http.MethodGet, v.feedPath, nil)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Components) != 3 || doc.Components[0].Name != v.legend.components[0] {
+		t.Fatalf("компоненты %+v, легенда %v", doc.Components, v.legend.components)
 	}
 }
 
@@ -113,7 +148,7 @@ func TestSiteHasNoDeadLinks(t *testing.T) {
 // файлов: на неизвестный путь у него своя страница, а на метод, которого он
 // не знает, — 405 с Allow, а не 200 и страница.
 func TestSiteMethodsAndErrors(t *testing.T) {
-	s := newTestSite(t, Options{Host: "nimbus-lab.io"})
+	s := newTestSite(t, Options{Host: "quiet-river.io"})
 
 	rsp := get(t, s, http.MethodGet, "/no-such-page", nil)
 	body := bodyOf(t, rsp)
@@ -151,7 +186,7 @@ func TestSiteMethodsAndErrors(t *testing.T) {
 // TestSiteCachingAndCompression — повторный заход даёт 304, а браузеру
 // предлагается gzip. Сервер, который этого не делает, сам по себе редкость.
 func TestSiteCachingAndCompression(t *testing.T) {
-	s := newTestSite(t, Options{Host: "nimbus-lab.io"})
+	s := newTestSite(t, Options{Host: "quiet-river.io"})
 
 	first := get(t, s, http.MethodGet, "/", nil)
 	plain := bodyOf(t, first)
@@ -210,9 +245,9 @@ func TestSiteCachingAndCompression(t *testing.T) {
 // должен отвечать живыми данными, а не кэшем.
 func TestStatusFeedIsLive(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
-	s := newTestSite(t, Options{Host: "nimbus-lab.io", Now: func() time.Time { return now }})
+	s := newTestSite(t, Options{Host: "quiet-river.io", Now: func() time.Time { return now }})
 
-	rsp := get(t, s, http.MethodGet, "/api/status.json", nil)
+	rsp := get(t, s, http.MethodGet, s.FeedPath(), nil)
 	body := bodyOf(t, rsp)
 	if rsp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control %q", rsp.Header.Get("Cache-Control"))
@@ -235,7 +270,7 @@ func TestStatusFeedIsLive(t *testing.T) {
 	// Через время значения меняются: статика в «живой» сводке видна сразу.
 	now = now.Add(time.Minute)
 	var doc2 statusDoc
-	if err := json.Unmarshal(bodyOf(t, get(t, s, http.MethodGet, "/api/status.json", nil)), &doc2); err != nil {
+	if err := json.Unmarshal(bodyOf(t, get(t, s, http.MethodGet, s.FeedPath(), nil)), &doc2); err != nil {
 		t.Fatal(err)
 	}
 	if doc2.Updated == doc.Updated {
@@ -247,12 +282,12 @@ func TestStatusFeedIsLive(t *testing.T) {
 // у всех, кто собрал masquevpn: одинаковая страница у тысячи серверов — это и есть
 // признак сборки, ради ухода от которого сайт и заведён.
 func TestSiteDiffersPerDomain(t *testing.T) {
-	a := bodyOf(t, get(t, newTestSite(t, Options{Host: "nimbus-lab.io"}), http.MethodGet, "/", nil))
+	a := bodyOf(t, get(t, newTestSite(t, Options{Host: "quiet-river.io"}), http.MethodGet, "/", nil))
 	b := bodyOf(t, get(t, newTestSite(t, Options{Host: "harbor-metrics.net"}), http.MethodGet, "/", nil))
 	if bytes.Equal(a, b) {
 		t.Fatal("страницы двух разных доменов совпадают побайтно")
 	}
-	if !bytes.Contains(a, []byte("Nimbus Lab")) {
+	if !bytes.Contains(a, []byte("Quiet River")) {
 		t.Fatalf("название не выведено из домена: %s", firstLines(a))
 	}
 	if !bytes.Contains(b, []byte("Harbor Metrics")) {
@@ -266,6 +301,74 @@ func TestSiteDiffersPerDomain(t *testing.T) {
 	}
 }
 
+// TestSiteDiffersPerSeed — главное свойство: у двух установок на одном и
+// том же домене сайты разные, а у одной установки — одинаковые при каждом
+// запуске. Первое не даёт вычислить страницу по домену, второе — заметить
+// сервер по тому, что сайт «меняет дизайн» после каждой перезагрузки.
+func TestSiteDiffersPerSeed(t *testing.T) {
+	page := func(seed string) []byte {
+		return bodyOf(t, get(t, newTestSite(t, Options{Host: "quiet-river.io", Seed: seed}), http.MethodGet, "/", nil))
+	}
+	a1, a2 := page("0123456789abcdef0123456789abcdef"), page("0123456789abcdef0123456789abcdef")
+	if !bytes.Equal(a1, a2) {
+		t.Fatal("один и тот же seed дал разные страницы")
+	}
+	if bytes.Equal(a1, page("fedcba9876543210fedcba9876543210")) {
+		t.Fatal("разные seed'ы на одном домене дали одинаковые страницы")
+	}
+	if bytes.Equal(a1, bodyOf(t, get(t, newTestSite(t, Options{Host: "quiet-river.io"}), http.MethodGet, "/", nil))) {
+		t.Fatal("страница с seed'ом совпала с той, что выводится из одного домена")
+	}
+
+	// На множестве установок выборы действительно расходятся.
+	lg, feeds, docs := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for i := 0; i < 64; i++ {
+		v := variantFor(fmt.Sprintf("install-%d", i))
+		lg[v.legend.tagline] = true
+		feeds[v.feedPath] = true
+		docs[v.docsPath] = true
+	}
+	if len(lg) < len(legends)-1 || len(feeds) < 3 || len(docs) < 3 {
+		t.Fatalf("мало разнообразия: легенд %d, фидов %d, путей документации %d", len(lg), len(feeds), len(docs))
+	}
+}
+
+// TestNoStockName — название из прежних версий нигде не всплывает: «Nimbus
+// Lab» стоял у всех установок и искался одной строкой.
+func TestNoStockName(t *testing.T) {
+	for i := 0; i < 16; i++ {
+		s := newTestSite(t, Options{Host: "cdn.example.net", Seed: fmt.Sprintf("seed-%02d-xxxxxxxxxxxx", i)})
+		for _, p := range []string{"/", "/status", s.FeedPath()} {
+			if b := bodyOf(t, get(t, s, http.MethodGet, p, nil)); bytes.Contains(bytes.ToLower(b), []byte("nimbus")) {
+				t.Fatalf("%s: в странице осталось прежнее название", p)
+			}
+		}
+	}
+}
+
+func TestLoadSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "site-seed")
+	s1, created, err := LoadSeed(path)
+	if err != nil || !created || len(s1) != 32 {
+		t.Fatalf("создание: %q created=%v err=%v", s1, created, err)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("права файла: %v %v", fi.Mode(), err)
+		}
+	}
+	s2, created, err := LoadSeed(path)
+	if err != nil || created || s2 != s1 {
+		t.Fatalf("повторное чтение: %q created=%v err=%v", s2, created, err)
+	}
+	if err := os.WriteFile(path, []byte("short\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadSeed(path); err == nil {
+		t.Fatal("короткий seed принят")
+	}
+}
+
 func firstLines(b []byte) string {
 	if len(b) > 300 {
 		b = b[:300]
@@ -275,7 +378,7 @@ func firstLines(b []byte) string {
 
 func TestTitleFromHost(t *testing.T) {
 	for host, want := range map[string]string{
-		"nimbus-lab.io":       "Nimbus Lab",
+		"quiet-river.io":      "Quiet River",
 		"api.harbor.net":      "Harbor",
 		"www.quiet-river.org": "Quiet River",
 		"cdn.example.co.uk":   "Example",

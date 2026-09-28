@@ -140,9 +140,9 @@ func (c *Server) TCPAddr() string {
 
 // FallbackSite — встроенный сайт-прикрытие.
 //
-// Текст стоит задать: содержимое по умолчанию одинаково у всех, кто собрал
-// masquevpn, и только домен, заголовок и описание делают сайт непохожим на
-// соседний. Живой backend за fallback_proxy всё равно сильнее.
+// Чем он отличается от сайта соседней установки, решает секретный seed
+// (см. site.LoadSeed): легенда, тексты, пути и оформление. Название по
+// умолчанию — из домена. Живой backend за fallback_proxy всё равно сильнее.
 type FallbackSite struct {
 	// Disabled — не поднимать встроенный сайт (посторонний увидит 404).
 	Disabled bool `json:"disabled,omitempty"`
@@ -155,6 +155,32 @@ type FallbackSite struct {
 	Description string `json:"description,omitempty"`
 	// Contact — адрес в подвале. Пусто — postmaster@Host.
 	Contact string `json:"contact,omitempty"`
+	// Seed — секрет, из которого выводится сайт. Пусто — берётся из
+	// SeedFile, а файла нет — он создаётся со случайным значением.
+	Seed string `json:"seed,omitempty"`
+	// SeedFile — где хранится seed. Пусто — DefaultSiteSeedFile().
+	SeedFile string `json:"seed_file,omitempty"`
+}
+
+// Название и описание, которые установщик до 28.09.2026 вписывал в каждую
+// конфигурацию. Одна строка у всех установок искалась поиском, поэтому
+// сервер считает их незаданными (см. WithoutLegacyText).
+const (
+	legacySiteTitle       = "Nimbus Lab"
+	legacySiteDescription = "Realtime delivery for applications that cannot wait."
+)
+
+// WithoutLegacyText возвращает копию, в которой название и описание из
+// прежних версий установщика сброшены, и сообщает, было ли что сбрасывать.
+func (f FallbackSite) WithoutLegacyText() (FallbackSite, bool) {
+	changed := false
+	if f.Title == legacySiteTitle {
+		f.Title, changed = "", true
+	}
+	if f.Description == legacySiteDescription {
+		f.Description, changed = "", true
+	}
+	return f, changed
 }
 
 // NAT — выпуск клиентов в интернет.
@@ -224,6 +250,9 @@ func (c *Server) Defaults() {
 // Validate проверяет конфигурацию.
 func (c *Server) Validate() error {
 	var errs []error
+	if n := len(c.FallbackSite.Seed); n > 0 && n < 16 {
+		errs = append(errs, errors.New("fallback_site.seed: нужно не меньше 16 символов — seed должен быть неугадываемым"))
+	}
 	switch {
 	case c.ACME.Enabled():
 		// Проверка tls-alpn-01 приходит по TCP: без слушателя её пройти нечем.

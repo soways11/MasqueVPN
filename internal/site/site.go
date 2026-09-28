@@ -10,12 +10,16 @@
 // сама, — то есть ровно тот набор, по отсутствию которого домен и
 // выглядит пустышкой.
 //
-// Чего он НЕ делает и не может: это не замена настоящему backend'у.
-// Содержимое здесь одно и то же у всех, кто соберёт masquevpn, поэтому текст,
-// заголовок и домен параметризованы, а оформление (акцент, знак, имена
-// файлов ассетов) выводится из домена — чтобы страницы не были байт в байт
-// одинаковыми у всех установок. Если есть чем занять домен по-настоящему,
-// fallback_proxy на живой сайт по-прежнему сильнее.
+// Чего он НЕ делает и не может: это не замена настоящему backend'у. Код
+// masquevpn публичный, поэтому всё, что отличает сайт одной установки от
+// другой, выводится из секретного случайного seed'а установки (Options.Seed):
+// легенда сервиса и её тексты, пути документации и фида статуса, подписи в
+// меню, акцент, шрифт, скругления, имена ассетов. Из домена — только
+// название, как у любого настоящего сайта. Выводить остальное из домена
+// нельзя: зная код, по домену можно было бы вычислить ожидаемую страницу и
+// сверить её побайтно. Шаблон разметки всё равно общий, так что тот, кто
+// ищет именно masquevpn, сайт узнает; если есть чем занять домен
+// по-настоящему, fallback_proxy на живой сайт сильнее.
 //
 // Заголовок Server сознательно не ставится: назваться nginx'ом, оставаясь
 // Go по TLS и QUIC, значит добавить противоречие, а не убрать признак.
@@ -44,8 +48,13 @@ type Options struct {
 	Host string
 	// Title — название сервиса. Пусто — производное от Host.
 	Title string
-	// Description — строка под заголовком и в meta description.
+	// Description — строка под заголовком и в meta description. Пусто —
+	// из легенды, которую выбрал Seed.
 	Description string
+	// Seed — секрет установки, из которого выводятся легенда, пути и
+	// оформление (см. LoadSeed). Пусто — выводятся из Host и Title; так
+	// делать можно только в тестах: по домену страница вычисляется заранее.
+	Seed string
 	// Contact — адрес в подвале. Пусто — postmaster@Host.
 	Contact string
 	// Built — время «последнего изменения» страниц (Last-Modified).
@@ -56,7 +65,6 @@ type Options struct {
 }
 
 const (
-	statusPath  = "/api/status.json"
 	allowHeader = "GET, HEAD, OPTIONS"
 	// maxAge ассетов: имя содержит хэш содержимого, значит их можно кэшировать
 	// навсегда — так делает любая современная сборка.
@@ -83,22 +91,37 @@ type Site struct {
 	built    time.Time
 	now      func() time.Time
 	title    string
+	feed     string // путь фида статуса
+	comps    [3]string
 }
 
 // New собирает сайт. Все страницы и ассеты строятся один раз: дальше
 // обработчик только отдаёт готовые байты.
 func New(o Options) (*Site, error) {
+	seed := o.Seed
+	if seed == "" {
+		seed = "host:" + o.Host + "|" + o.Title
+	}
+	return build(o, variantFor(seed))
+}
+
+func build(o Options, v variant) (*Site, error) {
+	if o.Description == "" {
+		o.Description = v.legend.tagline
+	}
 	o.defaults()
-	th := themeFor(o.Host + "|" + o.Title)
-	css := renderCSS(th)
-	js := scriptJS
+	v.mark = markFor(o.Title)
+	css := renderCSS(v)
+	js := strings.ReplaceAll(scriptJS, "$FEED", v.feedPath)
 	cssPath := assetPath("app", ".css", css)
 	jsPath := assetPath("app", ".js", js)
 
 	d := &pageData{
 		Site: o.Title, Description: o.Description, Contact: o.Contact,
-		Host: o.Host, Mark: th.mark, CSS: cssPath, JS: jsPath,
-		Year: o.Built.Year(), Accent: th.accent, Word: th.word,
+		Host: o.Host, Mark: v.mark, CSS: cssPath, JS: jsPath,
+		Year: o.Built.Year(), Accent: v.accent, Word: v.word,
+		DocsPath: v.docsPath, DocsLabel: v.docsLabel, FeedPath: v.feedPath,
+		HomeLabel: v.homeLabel, FeedExample: v.legend.feedExample,
 	}
 
 	s := &Site{
@@ -106,12 +129,14 @@ func New(o Options) (*Site, error) {
 		built: o.Built,
 		now:   o.Now,
 		title: o.Title,
+		feed:  v.feedPath,
+		comps: v.legend.components,
 	}
 	pages := []struct {
 		path, title, tmpl string
 	}{
-		{"/", o.Title, indexBody},
-		{"/docs", "Documentation — " + o.Title, docsBody},
+		{"/", o.Title, indexBody(v.legend)},
+		{v.docsPath, v.docsLabel + " — " + o.Title, docsBody(v)},
 		{"/status", "Status — " + o.Title, statusBody},
 	}
 	for _, p := range pages {
@@ -122,11 +147,9 @@ func New(o Options) (*Site, error) {
 		s.res[p.path] = newResource(html, "text/html; charset=utf-8", pageCache, http.StatusOK)
 	}
 	errPage := func(code int, text string) (*resource, error) {
-		html, err := renderPage(fmt.Sprintf("%d %s — %s", code, text, o.Title), errorBody, &pageData{
-			Site: d.Site, Description: d.Description, Contact: d.Contact, Host: d.Host,
-			Mark: d.Mark, CSS: d.CSS, JS: d.JS, Year: d.Year, Accent: d.Accent, Word: d.Word,
-			Code: code, CodeText: text,
-		})
+		e := *d
+		e.Code, e.CodeText = code, text
+		html, err := renderPage(fmt.Sprintf("%d %s — %s", code, text, o.Title), errorBody, &e)
 		if err != nil {
 			return nil, err
 		}
@@ -143,10 +166,13 @@ func New(o Options) (*Site, error) {
 	s.res[cssPath] = newResource([]byte(css), "text/css; charset=utf-8", assetCache, http.StatusOK)
 	s.res[jsPath] = newResource([]byte(js), "text/javascript; charset=utf-8", assetCache, http.StatusOK)
 	s.res["/robots.txt"] = newResource([]byte(renderRobots(o.Host)), "text/plain; charset=utf-8", fileCache, http.StatusOK)
-	s.res["/sitemap.xml"] = newResource([]byte(renderSitemap(o.Host, o.Built)), "application/xml", fileCache, http.StatusOK)
-	s.res["/favicon.ico"] = newResource(favicon(th.accentRGB), "image/x-icon", fileCache, http.StatusOK)
+	s.res["/sitemap.xml"] = newResource([]byte(renderSitemap(o.Host, o.Built, v.docsPath)), "application/xml", fileCache, http.StatusOK)
+	s.res["/favicon.ico"] = newResource(favicon(v.accentRGB), "image/x-icon", fileCache, http.StatusOK)
 	return s, nil
 }
+
+// FeedPath — путь машиночитаемой сводки статуса у этой установки.
+func (s *Site) FeedPath() string { return s.feed }
 
 func (o *Options) defaults() {
 	if o.Host == "" {
@@ -154,9 +180,6 @@ func (o *Options) defaults() {
 	}
 	if o.Title == "" {
 		o.Title = titleFromHost(o.Host)
-	}
-	if o.Description == "" {
-		o.Description = "Realtime delivery for applications that cannot wait: one connection, ordered messages, predictable latency."
 	}
 	if o.Contact == "" {
 		o.Contact = "postmaster@" + o.Host
@@ -171,7 +194,7 @@ func (o *Options) defaults() {
 }
 
 // titleFromHost делает из домена название сервиса: берётся регистрируемая
-// часть (api.nimbus-lab.io → Nimbus Lab), а не поддомен — «Api» или «Vpn» в
+// часть (api.quiet-river.io → Quiet River), а не поддомен — «Api» или «Vpn» в
 // шапке сайта выглядели бы ровно так, как не надо.
 func titleFromHost(host string) string {
 	h := host
@@ -246,7 +269,7 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := path.Clean(r.URL.Path)
-	if p == statusPath {
+	if p == s.feed {
 		s.serveStatus(w, r)
 		return
 	}
@@ -332,9 +355,9 @@ func (s *Site) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Status:  "operational",
 		Updated: now.Format(time.RFC3339),
 		Components: []statusComponent{
-			{"Edge", "operational", lat(12, 9)},
-			{"Delivery", "operational", lat(28, 17)},
-			{"API", "operational", lat(41, 23)},
+			{s.comps[0], "operational", lat(12, 9)},
+			{s.comps[1], "operational", lat(28, 17)},
+			{s.comps[2], "operational", lat(41, 23)},
 		},
 	}
 	body, err := json.Marshal(doc)
@@ -357,38 +380,80 @@ func (s *Site) serveStatus(w http.ResponseWriter, r *http.Request) {
 
 // ---------- оформление ----------
 
-// theme — то, что отличает наш сайт от такого же сайта у соседа.
-// Выводится из домена: одинаковые байты у всех установок сами по себе были бы
-// признаком сборки.
-type theme struct {
+// variant — то, чем сайт этой установки отличается от такого же сайта у
+// соседа. Выводится из seed'а установки: одинаковые байты у всех установок
+// сами по себе были бы признаком сборки.
+type variant struct {
+	legend    *legend
+	word      string
 	accent    string
 	accentRGB [3]byte
 	mark      string
-	word      string
+	docsPath  string
+	docsLabel string
+	feedPath  string
+	homeLabel string
+	radius    int
+	font      string
+	width     int
+	h1        int
+	healthPos int // после какого раздела документации идёт раздел о статусе
 }
 
-func themeFor(seed string) theme {
-	sum := sha256.Sum256([]byte(seed))
-	palette := [][3]byte{
+var (
+	palette = [][3]byte{
 		{0x2b, 0x6c, 0xb0}, {0x27, 0x67, 0x49}, {0x7b, 0x34, 0x1e},
 		{0x55, 0x3c, 0x9a}, {0x28, 0x5e, 0x61}, {0x82, 0x27, 0x27},
-		{0x2c, 0x52, 0x82}, {0x97, 0x26, 0x6d},
+		{0x2c, 0x52, 0x82}, {0x97, 0x26, 0x6d}, {0x1f, 0x6f, 0x8b},
+		{0x6b, 0x4f, 0x1d}, {0x3d, 0x5a, 0x80}, {0x4a, 0x2f, 0x7a},
+		{0x0f, 0x76, 0x6e}, {0xb4, 0x3f, 0x0e},
 	}
-	words := []string{"platform", "service", "network", "cluster"}
-	c := palette[int(sum[0])%len(palette)]
-	mark := "S"
-	for _, r := range seed {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
-			mark = strings.ToUpper(string(r))
-			break
-		}
+	fonts = []string{
+		`-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`,
+		`system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif`,
+		`"Inter",system-ui,-apple-system,"Segoe UI",sans-serif`,
+		`ui-sans-serif,system-ui,sans-serif,"Apple Color Emoji","Segoe UI Emoji"`,
 	}
-	return theme{
+	radii  = []int{4, 6, 8, 10, 12}
+	widths = []int{820, 860, 900, 960}
+	h1s    = []int{32, 34, 36, 38}
+)
+
+// variantFor раскладывает seed на независимые выборы: у каждого свой
+// хэш, чтобы, скажем, цвет не определял легенду.
+func variantFor(seed string) variant {
+	pick := func(label string, n int) int {
+		sum := sha256.Sum256([]byte(seed + "\x00" + label))
+		return int(binary.BigEndian.Uint32(sum[:4]) % uint32(n))
+	}
+	lg := &legends[pick("legend", len(legends))]
+	c := palette[pick("accent", len(palette))]
+	docs := docsPaths[pick("docs", len(docsPaths))]
+	return variant{
+		legend:    lg,
+		word:      lg.words[pick("word", len(lg.words))],
 		accent:    fmt.Sprintf("#%02x%02x%02x", c[0], c[1], c[2]),
 		accentRGB: c,
-		mark:      mark,
-		word:      words[int(sum[1])%len(words)],
+		docsPath:  docs[0],
+		docsLabel: docs[1],
+		feedPath:  feedPaths[pick("feed", len(feedPaths))],
+		homeLabel: homeLabels[pick("home", len(homeLabels))],
+		radius:    radii[pick("radius", len(radii))],
+		font:      fonts[pick("font", len(fonts))],
+		width:     widths[pick("width", len(widths))],
+		h1:        h1s[pick("h1", len(h1s))],
+		healthPos: pick("health", len(lg.docs)+1),
 	}
+}
+
+// markFor — буква в значке: первая буква названия.
+func markFor(title string) string {
+	for _, r := range title {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return strings.ToUpper(string(r))
+		}
+	}
+	return "S"
 }
 
 // assetPath даёт имя с хэшем содержимого — как сборщик фронтенда. Заодно это
@@ -456,6 +521,11 @@ type pageData struct {
 	JS          string
 	Accent      string
 	Word        string
+	DocsPath    string
+	DocsLabel   string
+	FeedPath    string
+	FeedExample string
+	HomeLabel   string
 	Year        int
 	Code        int
 	CodeText    string
@@ -492,7 +562,7 @@ const layoutHTML = `<!doctype html>
 <body>
 <header class="top">
 <a class="brand" href="/"><span class="mark">{{.Mark}}</span>{{.Site}}</a>
-<nav><a href="/">Overview</a><a href="/docs">Docs</a><a href="/status">Status</a></nav>
+<nav><a href="/">{{.HomeLabel}}</a><a href="{{.DocsPath}}">{{.DocsLabel}}</a><a href="/status">Status</a></nav>
 </header>
 <main>
 {{template "body" .}}
@@ -505,38 +575,48 @@ const layoutHTML = `<!doctype html>
 </html>
 `
 
-const indexBody = `<h1>{{.Site}}</h1>
-<p class="lead">{{.Description}}</p>
-<div class="cards">
-<section><h2>One connection</h2><p>Subscribers keep a single long-lived connection open; the {{.Word}} fans out every update over it instead of asking clients to poll.</p></section>
-<section><h2>Predictable latency</h2><p>Delivery is paced, so a burst upstream does not turn into a burst of jitter downstream. Current numbers are on the <a href="/status">status page</a>.</p></section>
-<section><h2>Small API</h2><p>One endpoint, JSON in and JSON out, no SDK required. The <a href="/docs">documentation</a> fits on a single page.</p></section>
-</div>
-<p class="note">Interested in access? Write to <a href="mailto:{{.Contact}}">{{.Contact}}</a>.</p>
-`
+// indexBody — главная: описание и три блока легенды. Тексты легенд —
+// константы из этого пакета, поэтому их можно склеивать в шаблон.
+func indexBody(lg *legend) string {
+	var b strings.Builder
+	b.WriteString("<h1>{{.Site}}</h1>\n<p class=\"lead\">{{.Description}}</p>\n<div class=\"cards\">\n")
+	for _, c := range lg.cards {
+		b.WriteString("<section><h2>" + c[0] + "</h2><p>" + c[1] + "</p></section>\n")
+	}
+	b.WriteString("</div>\n<p class=\"note\">Interested in access? Write to <a href=\"mailto:{{.Contact}}\">{{.Contact}}</a>.</p>\n")
+	return b.String()
+}
 
-const docsBody = `<h1>Documentation</h1>
-<p class="lead">Everything the {{.Word}} exposes, on one page.</p>
-<h2>Health</h2>
+const healthSection = `<h2>Health</h2>
 <p>The status feed is public and needs no credentials:</p>
-<pre><code>curl -s https://{{.Host}}/api/status.json</code></pre>
+<pre><code>curl -s https://{{.Host}}{{.FeedPath}}</code></pre>
 <p>It answers with the current state of every component:</p>
 <pre><code>{
   "status": "operational",
   "updated": "2026-01-01T00:00:00Z",
   "components": [
-    {"name": "Edge", "status": "operational", "latency_ms": 14}
+    {"name": "{{.FeedExample}}", "status": "operational", "latency_ms": 14}
   ]
 }</code></pre>
-<h2>Subscribing</h2>
-<p>Client libraries open one connection per process and keep it open. Reconnects are
-expected to be rare; when they happen, resume from the last sequence number you saw
-instead of replaying the whole stream.</p>
-<h2>Limits</h2>
-<p>Per-connection throughput is shaped, and idle connections are closed after
-ten minutes of silence. Send a keepalive if you have nothing else to send.</p>
-<p class="note">Questions: <a href="mailto:{{.Contact}}">{{.Contact}}</a>.</p>
 `
+
+// docsBody — документация: разделы легенды, между ними — раздел про фид
+// статуса (его место тоже зависит от установки).
+func docsBody(v variant) string {
+	var b strings.Builder
+	b.WriteString("<h1>{{.DocsLabel}}</h1>\n<p class=\"lead\">" + v.legend.docsLead + "</p>\n")
+	for i, d := range v.legend.docs {
+		if i == v.healthPos {
+			b.WriteString(healthSection)
+		}
+		b.WriteString("<h2>" + d[0] + "</h2>\n" + d[1] + "\n")
+	}
+	if v.healthPos >= len(v.legend.docs) {
+		b.WriteString(healthSection)
+	}
+	b.WriteString("<p class=\"note\">Questions: <a href=\"mailto:{{.Contact}}\">{{.Contact}}</a>.</p>\n")
+	return b.String()
+}
 
 const statusBody = `<h1>Status</h1>
 <p class="lead" id="summary">Loading current status&hellip;</p>
@@ -544,7 +624,7 @@ const statusBody = `<h1>Status</h1>
 <thead><tr><th>Component</th><th>State</th><th>Latency</th></tr></thead>
 <tbody><tr><td colspan="3" class="muted">&hellip;</td></tr></tbody>
 </table>
-<p class="note">Machine-readable feed: <a href="/api/status.json">/api/status.json</a></p>
+<p class="note">Machine-readable feed: <a href="{{.FeedPath}}">{{.FeedPath}}</a></p>
 `
 
 const errorBody = `<h1>{{.Code}}</h1>
@@ -553,28 +633,35 @@ const errorBody = `<h1>{{.Code}}</h1>
 or check the <a href="/status">status page</a>.</p>
 `
 
-func renderCSS(th theme) string {
-	return strings.ReplaceAll(baseCSS, "$ACCENT", th.accent)
+func renderCSS(v variant) string {
+	return strings.NewReplacer(
+		"$ACCENT", v.accent,
+		"$FONT", v.font,
+		"$RADIUS_S", strconv.Itoa(max(v.radius-3, 3)),
+		"$RADIUS", strconv.Itoa(v.radius),
+		"$WIDTH", strconv.Itoa(v.width),
+		"$H1", strconv.Itoa(v.h1),
+	).Replace(baseCSS)
 }
 
 const baseCSS = `:root{--accent:$ACCENT;--fg:#1a202c;--muted:#616e7c;--line:#e2e8f0;--bg:#fff}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 $FONT}
 .top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 24px;border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;font-weight:600;color:var(--fg);text-decoration:none}
-.mark{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:7px;background:var(--accent);color:#fff;font-size:15px}
+.mark{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:$RADIUS_Spx;background:var(--accent);color:#fff;font-size:15px}
 nav a{margin-left:18px;color:var(--muted);text-decoration:none;font-size:15px}
 nav a:hover{color:var(--accent)}
-main{max-width:860px;margin:0 auto;padding:40px 24px 64px}
-h1{font-size:34px;line-height:1.2;margin:0 0 12px}
+main{max-width:$WIDTHpx;margin:0 auto;padding:40px 24px 64px}
+h1{font-size:$H1px;line-height:1.2;margin:0 0 12px}
 h2{font-size:19px;margin:32px 0 8px}
 a{color:var(--accent)}
 .lead{font-size:18px;color:var(--muted);margin:0 0 28px}
 .cards{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
-.cards section{border:1px solid var(--line);border-radius:10px;padding:18px}
+.cards section{border:1px solid var(--line);border-radius:$RADIUSpx;padding:18px}
 .cards h2{margin:0 0 6px;font-size:16px}
 .cards p{margin:0;color:var(--muted);font-size:15px}
-pre{background:#f7fafc;border:1px solid var(--line);border-radius:8px;padding:14px;overflow:auto}
+pre{background:#f7fafc;border:1px solid var(--line);border-radius:$RADIUS_Spx;padding:14px;overflow:auto}
 code{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 table{width:100%;border-collapse:collapse;margin-top:8px}
 th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:15px}
@@ -583,7 +670,7 @@ th{color:var(--muted);font-weight:500}
 .muted,.note{color:var(--muted)}
 .note{font-size:14px;margin-top:28px}
 footer{border-top:1px solid var(--line);color:var(--muted);font-size:14px}
-footer p{max-width:860px;margin:0 auto;padding:18px 24px}
+footer p{max-width:$WIDTHpx;margin:0 auto;padding:18px 24px}
 @media (prefers-color-scheme:dark){
 :root{--fg:#e6ebf1;--muted:#98a4b3;--line:#2a3340;--bg:#12171f}
 pre{background:#1a212b}
@@ -611,7 +698,7 @@ const scriptJS = `(function(){
     summary.textContent="All systems "+doc.status+" · updated "+d.toLocaleTimeString();
   }
   function load(){
-    fetch("/api/status.json",{cache:"no-store"})
+    fetch("$FEED",{cache:"no-store"})
       .then(function(r){return r.json();})
       .then(draw)
       .catch(function(){summary.textContent="Status feed unavailable.";});
@@ -625,11 +712,11 @@ func renderRobots(host string) string {
 	return "User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: https://" + host + "/sitemap.xml\n"
 }
 
-func renderSitemap(host string, built time.Time) string {
+func renderSitemap(host string, built time.Time, docsPath string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
-	for _, p := range []string{"/", "/docs", "/status"} {
+	for _, p := range []string{"/", docsPath, "/status"} {
 		b.WriteString("  <url><loc>https://" + host + p + "</loc><lastmod>" +
 			built.Format("2006-01-02") + "</lastmod></url>\n")
 	}

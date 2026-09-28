@@ -316,8 +316,6 @@ $ACME_BLOCK$CERT_BLOCK
   "server_profile": "cloudflare",
 
   "fallback_site": {
-    "title": "Nimbus Lab",
-    "description": "Realtime delivery for applications that cannot wait.",
     "contact": "hello@$DOMAIN"
   },
 $COVER_BLOCK
@@ -346,6 +344,30 @@ if grep -q '"server_profile"[[:space:]]*:[[:space:]]*"cdn"' /etc/masquevpn/serve
         /etc/masquevpn/server.json
     say "профиль сервера: эвристика cdn заменена на снятый с живого сервера"
     say "  (копия прежней конфигурации — /etc/masquevpn/server.json.bak.*)"
+fi
+
+# ---------- сайт-прикрытие: прежнее общее название ----------
+# До 28.09.2026 сюда вписывалось «Nimbus Lab» — одно название у всех
+# установок, которое находится поиском. Новый сервер его и так не
+# показывает (название берётся из домена, остальное — из секретного
+# /var/lib/masquevpn/site-seed, который он создаёт сам), а строки из
+# конфигурации убираем, чтобы они не вводили в заблуждение.
+if grep -q '"title"[[:space:]]*:[[:space:]]*"Nimbus Lab"' /etc/masquevpn/server.json 2>/dev/null; then
+    tmp=/etc/masquevpn/server.json.new
+    sed '/"title"[[:space:]]*:[[:space:]]*"Nimbus Lab",\{0,1\}[[:space:]]*$/d;
+         /"description"[[:space:]]*:[[:space:]]*"Realtime delivery for applications that cannot wait\.",\{0,1\}[[:space:]]*$/d' \
+        /etc/masquevpn/server.json > "$tmp"
+    chmod 0600 "$tmp"
+    # Правка построчная; если из-за нестандартной разметки JSON сломался —
+    # оставляем как было: сервер эти строки и так не показывает.
+    if /usr/local/bin/vpnserver -config "$tmp" -check >/dev/null 2>&1; then
+        cp -p /etc/masquevpn/server.json "/etc/masquevpn/server.json.bak.$(date +%s)"
+        mv "$tmp" /etc/masquevpn/server.json
+        say "сайт-прикрытие: общее для всех установок название «Nimbus Lab» убрано из конфигурации"
+    else
+        rm -f "$tmp"
+        say "сайт-прикрытие: «Nimbus Lab» в конфигурации оставлен (сервер его всё равно не показывает)"
+    fi
 fi
 
 /usr/local/bin/vpnserver -config /etc/masquevpn/server.json -check \

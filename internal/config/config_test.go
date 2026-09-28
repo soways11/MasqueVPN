@@ -210,6 +210,32 @@ func TestServerTCPAndFallback(t *testing.T) {
 	}
 }
 
+// TestFallbackSiteSeedAndLegacyText — seed проверяется на длину, а
+// название из прежних версий установщика («Nimbus Lab» у всех) сбрасывается.
+func TestFallbackSiteSeedAndLegacyText(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.json")
+	base := `{"cert_file":"c","key_file":"k","auth_key":"` + key + `"`
+
+	os.WriteFile(p, []byte(base+`,"fallback_site":{"seed":"short"}}`), 0o600)
+	if _, err := LoadServer(p); err == nil {
+		t.Fatal("короткий seed принят")
+	}
+	os.WriteFile(p, []byte(base+`,"fallback_site":{"seed":"0123456789abcdef","seed_file":"/x/y",`+
+		`"title":"Nimbus Lab","description":"Realtime delivery for applications that cannot wait.","contact":"a@b"}}`), 0o600)
+	c, err := LoadServer(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, legacy := c.FallbackSite.WithoutLegacyText()
+	if !legacy || fs.Title != "" || fs.Description != "" || fs.Contact != "a@b" || fs.Seed != "0123456789abcdef" || fs.SeedFile != "/x/y" {
+		t.Fatalf("сброс прежнего текста: %+v legacy=%v", fs, legacy)
+	}
+	if _, legacy := (FallbackSite{Title: "Quiet River", Description: "Own text."}).WithoutLegacyText(); legacy {
+		t.Fatal("своё название принято за прежнее")
+	}
+}
+
 // TestServerACMEValidation — ACME нельзя включить в конфигурации, где проверку
 // владения доменом пройти нечем: она приходит на TCP/443.
 func TestServerACMEValidation(t *testing.T) {

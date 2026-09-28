@@ -35,6 +35,14 @@ func defaultACMECache() string {
 	return preferExisting(DefaultACMECache, LegacyVarLibDir+"/acme")
 }
 
+// SiteSeedFile — имя файла с секретом сайта-прикрытия.
+const SiteSeedFile = "site-seed"
+
+// DefaultSiteSeedFile — файл seed'а сайта-прикрытия по умолчанию.
+func DefaultSiteSeedFile() string {
+	return preferExisting(VarLibDir+"/"+SiteSeedFile, LegacyVarLibDir+"/"+SiteSeedFile)
+}
+
 // preferExisting возвращает cur, если он есть или если нет и legacy;
 // иначе — legacy.
 func preferExisting(cur, legacy string) string {

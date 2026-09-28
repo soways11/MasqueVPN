@@ -78,30 +78,56 @@ func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Hand
 		log.Info("сайт-прикрытие", "dir", cfg.FallbackDir)
 		return http.FileServer(http.Dir(cfg.FallbackDir)), nil
 	case !cfg.FallbackSite.Disabled:
-		s := cfg.FallbackSite
+		s, legacy := cfg.FallbackSite.WithoutLegacyText()
+		if legacy {
+			log.Info("в fallback_site название или описание из прежних версий установщика — " +
+				"оно было одинаковым у всех установок и не используется; строки можно удалить из конфигурации")
+		}
 		if s.Host != "" {
 			host = s.Host
 		}
+		seed := siteSeed(s, log)
 		h, err := site.New(site.Options{
 			Host:        host,
 			Title:       s.Title,
 			Description: s.Description,
 			Contact:     s.Contact,
+			Seed:        seed,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("fallback_site: %w", err)
 		}
 		log.Info("сайт-прикрытие", "встроенный", host)
-		if s.Title == "" && s.Description == "" {
-			log.Info("у встроенного сайта текст по умолчанию — он одинаков у всех сборок; " +
-				"задайте fallback_site.title и description, а лучше fallback_proxy на живой backend")
-		}
 		return h, nil
 	default:
 		log.Warn("сайта-прикрытия нет: посторонний увидит только 404 — задайте fallback_proxy, fallback_dir " +
 			"или включите встроенный сайт (fallback_site.disabled=false)")
 		return http.HandlerFunc(http.NotFound), nil
 	}
+}
+
+// siteSeed — секрет, из которого выводится встроенный сайт: из
+// конфигурации, из файла, а если файла нет — новый, записанный в файл.
+// Записать некуда — сайт всё равно поднимается, но со случайным seed'ом на
+// этот запуск: вычисляемая по домену страница хуже, чем сменившаяся после
+// перезапуска.
+func siteSeed(s config.FallbackSite, log *slog.Logger) string {
+	if s.Seed != "" {
+		return s.Seed
+	}
+	path := s.SeedFile
+	if path == "" {
+		path = config.DefaultSiteSeedFile()
+	}
+	seed, created, err := site.LoadSeed(path)
+	if err != nil {
+		log.Warn("seed сайта-прикрытия не сохранить — сайт будет другим после перезапуска", "file", path, "err", err)
+		return site.RandomSeed()
+	}
+	if created {
+		log.Info("создан seed сайта-прикрытия: оформление и тексты этой установки", "file", path)
+	}
+	return seed
 }
 
 // withoutCONNECT отвечает на CONNECT так, как отвечает origin-сервер, и не

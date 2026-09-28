@@ -1091,11 +1091,24 @@ func TestProbeOverTCPGetsNoDocument(t *testing.T) {
 // домен всё равно отвечает связанными страницами, а не 404. Голый 404
 // отличим от VPN не лучше, чем брошенный домен.
 func TestBuiltinCoverSite(t *testing.T) {
-	s := newStand(t, opts{extraSrv: map[string]any{"fallback_dir": ""}})
+	seedDir := t.TempDir()
+	seedFile := filepath.Join(seedDir, "site-seed")
+	s := newStand(t, opts{extraSrv: map[string]any{
+		"fallback_dir": "",
+		// Seed — в каталог теста, а не в /var/lib/masquevpn машины, где
+		// идёт стенд.
+		"fallback_site": map[string]any{"seed_file": seedFile},
+	}})
 	s.server.waitLog(t, "TCP-слушатель запущен", 10*time.Second)
 
+	// Seed создан сам, и сервер об этом сказал.
+	s.server.waitLog(t, "создан seed сайта-прикрытия", 5*time.Second)
+	if b, err := os.ReadFile(seedFile); err != nil || len(strings.TrimSpace(string(b))) != 32 {
+		t.Fatalf("seed-файл: %q, %v", b, err)
+	}
+
 	home := probeTCP(t, s, "GET", "/")
-	for _, want := range []string{"200", "<title>", "/docs", "/status", "alt-svc: h3="} {
+	for _, want := range []string{"200", "<title>", "/status", "alt-svc: h3="} {
 		if !strings.Contains(strings.ToLower(home), strings.ToLower(want)) {
 			t.Fatalf("на главной нет %q:\n%s", want, home)
 		}
@@ -1104,10 +1117,23 @@ func TestBuiltinCoverSite(t *testing.T) {
 	if !strings.Contains(home, "Example") {
 		t.Fatalf("название не выведено из домена:\n%s", home)
 	}
-	for _, p := range []string{"/docs", "/status", "/robots.txt", "/favicon.ico", "/api/status.json"} {
-		if out := probeTCP(t, s, "GET", p); !strings.Contains(out, "200") {
+	// Пути документации и фида зависят от seed'а — берём их со страниц.
+	paths := []string{"/status", "/robots.txt", "/favicon.ico", "/sitemap.xml"}
+	for _, m := range regexp.MustCompile(`(?:href|src)="(/[^"]*)"`).FindAllStringSubmatch(home, -1) {
+		paths = append(paths, m[1])
+	}
+	feed := regexp.MustCompile(`Machine-readable feed: <a href="(/[^"]+)"`).FindStringSubmatch(probeTCP(t, s, "GET", "/status"))
+	if feed == nil {
+		t.Fatal("на странице статуса нет ссылки на фид")
+	}
+	paths = append(paths, feed[1])
+	for _, p := range paths {
+		if out := probeTCP(t, s, "GET", p); !strings.Contains(out, " 200") {
 			t.Fatalf("%s не отдан:\n%s", p, out)
 		}
+	}
+	if out := probeTCP(t, s, "GET", feed[1]); !strings.Contains(out, `"components"`) {
+		t.Fatalf("фид статуса %s:\n%s", feed[1], out)
 	}
 	if out := probeTCP(t, s, "GET", "/no-such-page"); !strings.Contains(out, "404") {
 		t.Fatalf("несуществующая страница не дала 404:\n%s", out)
