@@ -115,6 +115,14 @@ func ParseProfiles(raw []byte) (*Profiles, error) {
 		if pr.Config == nil {
 			continue
 		}
+		// Выключенный полный туннель без списка сетей — след переключателя
+		// «Весь трафик через VPN», которого в окнах больше нет. Такой профиль
+		// не подключался вовсе («routes пуст»), а вернуть переключатель
+		// обратно теперь нечем — возвращаем полный туннель сами. Раздельный
+		// туннель со списком сетей, заданный в файле руками, не трогаем.
+		if pr.Config.FullTunnel != nil && !*pr.Config.FullTunnel && len(pr.Config.Routes) == 0 {
+			pr.Config.FullTunnel = nil
+		}
 		pr.Config.Defaults()
 		kept = append(kept, pr)
 	}

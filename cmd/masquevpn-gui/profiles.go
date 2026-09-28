@@ -92,10 +92,6 @@ func (a *app) toggleSetting(name string) {
 		value = !(pr.Config.KillSwitch != nil && *pr.Config.KillSwitch)
 		v := value
 		pr.Config.KillSwitch = &v
-	case "full_tunnel":
-		value = !(pr.Config.FullTunnel != nil && *pr.Config.FullTunnel)
-		v := value
-		pr.Config.FullTunnel = &v
 	default:
 		return
 	}
@@ -126,7 +122,7 @@ func (a *app) openAddScreen() {
 	a.fields = [gui.MaxAddFields]string{}
 	a.focus = gui.FieldServer
 	a.clearNotice()
-	a.resize()
+	a.invalidate()
 }
 
 func (a *app) openEditScreen(i, focus int) {
@@ -142,7 +138,7 @@ func (a *app) openEditScreen(i, focus int) {
 	a.fields[gui.FieldName] = pr.Name
 	a.focus = focus
 	a.clearNotice()
-	a.resize()
+	a.invalidate()
 }
 
 func (a *app) clearNotice() { a.notice, a.failed, a.badField = "", false, 0 }
@@ -181,7 +177,7 @@ func (a *app) confirmAdd() {
 
 	a.screen, a.editing, a.scrollY = gui.ScreenSettings, false, 0
 	a.clearNotice()
-	a.resize()
+	a.invalidate()
 }
 
 // storeProfile записывает конфигурацию: при добавлении заводит новый
@@ -214,7 +210,7 @@ func (a *app) deleteEdited() {
 	a.appendLog("профиль удалён: " + name)
 	a.screen, a.editing, a.scrollY = a.addFrom, false, 0
 	a.clearNotice()
-	a.resize()
+	a.invalidate()
 }
 
 type errText string
@@ -258,7 +254,7 @@ func (a *app) openProfileMenu(i int) {
 // profileMenuRect — где нарисована кнопка «…» у i-го профиля.
 func (a *app) profileMenuRect(i int) gui.Rect {
 	if a.screen == gui.ScreenSettings {
-		s := gui.SettingsLayout(a.profileCount())
+		s := gui.SettingsLayout(a.profileCount(), a.winH)
 		if i < len(s.ProfileMenus) {
 			r := s.ProfileMenus[i]
 			r.Y = r.Y + s.Viewport.Y - a.scrollY
@@ -266,7 +262,7 @@ func (a *app) profileMenuRect(i int) gui.Rect {
 		}
 		return s.Back
 	}
-	m := gui.MainLayout(a.logOpen, a.profileCount())
+	m := gui.MainLayout(a.profileCount(), a.winH)
 	if i < len(m.ProfileMenus) {
 		return m.ProfileMenus[i]
 	}
@@ -380,5 +376,5 @@ func (a *app) removeProfile(i int) {
 	}
 	a.saveProfiles()
 	a.appendLog("профиль удалён: " + name)
-	a.resize()
+	a.invalidate()
 }

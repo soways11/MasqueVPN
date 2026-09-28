@@ -88,10 +88,18 @@ type app struct {
 	// Состояние интерфейса. Трогается только из потока окна, поэтому без
 	// блокировки: Win32 и так не терпит обращений к окну из чужого потока.
 	screen  gui.Screen
-	logOpen bool
 	scrollY int32
 	hot     gui.ItemID
 	pressed gui.ItemID
+
+	// winH — высота окна в логических точках. Меняет её только человек,
+	// потянув нижний край; экраны под неё подстраиваются, а не наоборот.
+	winH int32
+	// logChars — сколько знаков влезает в строку журнала (меряется при
+	// отрисовке): по нему прокрутка знает, сколько строк после переноса.
+	logChars int
+	// logCopied — до какого момента кнопка журнала говорит «Скопировано».
+	logCopied time.Time
 
 	edit      editors
 	addFrom   gui.Screen // экран, с которого открыли добавление
@@ -121,6 +129,11 @@ type app struct {
 	// раньше уборки, оставляет адаптер и маршруты.
 	done  chan struct{}
 	lines []string
+	// logScroll — на сколько строк журнал прокручен вверх от конца. Под
+	// замком: новые записи приходят из движка, и пока человек читает
+	// середину журнала, прокрутка сдвигается вместе с ними — строка под
+	// глазами не уезжает.
+	logScroll int32
 }
 
 var a = &app{meter: gui.NewMeter(graphPoints), scale: 1}
@@ -184,6 +197,7 @@ func main() {
 
 	a.loadProfiles()
 	trace(fmt.Sprintf("профилей загружено: %d", len(a.profiles.List)))
+	a.winH = gui.LoadWindowPrefs(windowPrefsPath()).Height
 
 	inst := moduleHandle()
 	wc := wndClassEx{
@@ -220,13 +234,18 @@ func main() {
 	}
 
 	a.scale = dpiScale(0) * uiZoom
+	// Запомненная высота могла остаться от большого монитора: на этом окно
+	// не должно уходить под панель задач.
+	if screenH := int32(float64(systemMetric(smCYMaximized))/a.scale) - 16; screenH > 0 && a.winH > screenH {
+		a.winH = gui.ClampHeight(screenH)
+	}
 	w, h := a.windowSize()
 	x := (systemMetric(smCXScreen) - w) / 2
 	y := (systemMetric(smCYScreen) - h) / 3 // чуть выше середины: так привычнее
 	// WS_POPUP: своя полоса заголовка вместо системной. WS_MINIMIZEBOX
 	// оставлен, иначе Windows не сворачивает окно по нашей кнопке.
 	a.hwnd = createWindow(windowClass, gui.AppName, wsExAppWindow,
-		wsPopup|wsMinimizeBox|wsVisible, x, y, w, h, 0, 0, inst)
+		wsPopup|wsThickFrame|wsMinimizeBox|wsVisible, x, y, w, h, 0, 0, inst)
 	if a.hwnd == 0 {
 		fatal("не удалось создать окно")
 		return
@@ -248,22 +267,68 @@ func main() {
 	}
 }
 
-// windowSize — размер окна в пикселях для текущего экрана и масштаба.
+// windowSize — размер окна в пикселях. Один на все экраны: окно больше не
+// подстраивается под экран (см. gui.DefaultWinH).
 func (a *app) windowSize() (int32, int32) {
-	w := scaled(gui.WinW, a.scale)
-	h := scaled(gui.WinH, a.scale)
-	switch a.screen {
-	case gui.ScreenSettings:
-		h = scaled(gui.SettingsH, a.scale)
-	case gui.ScreenAdd:
-		h = scaled(gui.AddLayout(a.editing).Height, a.scale)
-	default:
-		// Высота главного экрана зависит от числа профилей и журнала:
-		// список профилей растит окно, и считать её отдельно от раскладки
-		// значило бы держать два разных ответа на один вопрос.
-		h = scaled(gui.MainLayout(a.logOpen, a.profileCount()).Height, a.scale)
+	return scaled(gui.WinW, a.scale), scaled(gui.ClampHeight(a.winH), a.scale)
+}
+
+// windowPrefsPath — где окно помнит свою высоту.
+func windowPrefsPath() string { return filepath.Join(config.DataDir(), gui.WindowPrefsFile) }
+
+func (a *app) savePrefs() {
+	if err := gui.SaveWindowPrefs(windowPrefsPath(), gui.WindowPrefs{Height: a.winH}); err != nil {
+		trace("не удалось сохранить высоту окна: " + err.Error())
 	}
-	return w, h
+}
+
+// onSize — окно поменяло размер (человек потянул край или сменился масштаб).
+func (a *app) onSize(wParam, lParam uintptr) {
+	// Первый WM_SIZE приходит ещё из CreateWindow, когда a.hwnd пуст:
+	// InvalidateRect(NULL) перерисовал бы весь рабочий стол.
+	if wParam == sizeMinimized || a.hwnd == 0 {
+		return
+	}
+	h := int32(lParam >> 16 & 0xffff)
+	if h <= 0 || a.scale <= 0 {
+		return
+	}
+	a.winH = gui.ClampHeight(int32(float64(h)/a.scale + 0.5))
+	// Форма окна задана в пикселях и новый размер не переживает: без этого
+	// низ растянутого окна остался бы обрезанным по старой высоте.
+	w, _ := a.windowSize()
+	a.roundCorners(w, h)
+	a.clampScroll()
+	a.invalidate()
+}
+
+// onHitTest решает, где у окна край, за который его тянут. Только нижний:
+// ширина не меняется, а верх — это полоса заголовка, за неё окно таскают.
+func (a *app) onHitTest(lParam uintptr) uintptr {
+	var wr rect
+	procGetWindowRect.Call(uintptr(a.hwnd), uintptr(unsafe.Pointer(&wr)))
+	y := mouseY(lParam) // экранные координаты
+	if y >= wr.Bottom-scaled(gui.ResizeEdge, a.scale) && y < wr.Bottom {
+		return htBottom
+	}
+	return htClient
+}
+
+// onMinMax задаёт пределы растяжения: ширина неизменна, высота — от
+// gui.MinWinH (на ней помещается любой экран) до gui.MaxWinH.
+func (a *app) onMinMax(lParam uintptr) {
+	if lParam == 0 {
+		return
+	}
+	// Структура чужая (её память у Windows), поэтому копируем туда и обратно,
+	// а не приводим адрес к указателю Go — так же, как rectAt.
+	var mm minMaxInfo
+	procMoveMemory.Call(uintptr(unsafe.Pointer(&mm)), lParam, unsafe.Sizeof(mm))
+	w := scaled(gui.WinW, a.scale)
+	mm.MinTrackSize = point{w, scaled(gui.MinWinH, a.scale)}
+	mm.MaxTrackSize = point{w, scaled(gui.MaxWinH, a.scale)}
+	mm.MaxSize = point{w, mm.MaxSize.Y}
+	procMoveMemory.Call(lParam, uintptr(unsafe.Pointer(&mm)), unsafe.Sizeof(mm))
 }
 
 // resize подгоняет окно под текущий экран, не двигая его левый верхний угол.
@@ -379,6 +444,26 @@ func wndProc(hwnd windows.HWND, message uint32, wParam, lParam uintptr) uintptr 
 	case wmMouseWheel:
 		a.onWheel(int16(wParam >> 16))
 
+	case wmNCCalcSize:
+		// Вся площадь окна — наша: рамку, которую добавил WS_THICKFRAME,
+		// не показываем. Растягивание за край при этом остаётся.
+		return 0
+
+	case wmNCHitTest:
+		return a.onHitTest(lParam)
+
+	case wmGetMinMaxInfo:
+		a.onMinMax(lParam)
+		return 0
+
+	case wmSize:
+		a.onSize(wParam, lParam)
+
+	case wmExitSizeMove:
+		// Высоту запоминаем, когда человек отпустил край, а не на каждом
+		// шаге растяжения.
+		a.savePrefs()
+
 	case wmTimer:
 		if wParam == timerTick {
 			a.tick()
@@ -493,6 +578,7 @@ func (a *app) onPaint(hwnd windows.HWND) {
 		procGdipSetPixelOffsetMode.Call(g, pixelOffsetHalf)
 		p := &painter{g: g, hdc: windows.Handle(memDC), res: a.res, scale: a.scale}
 		gui.Paint(p, a.view(), a.hot, a.pressed, time.Now())
+		a.logChars = gui.LogChars(p)
 		procGdipDeleteGraphics.Call(g)
 	}
 	procBitBlt.Call(hdc, 0, 0, uintptr(w), uintptr(h), memDC, 0, 0, srcCopy)
@@ -508,7 +594,9 @@ func (a *app) view() gui.View {
 		Error:       a.lastErr,
 		TunAddr:     a.tunAddr,
 		Since:       a.since,
-		LogOpen:     a.logOpen,
+		Height:      a.winH,
+		LogScroll:   a.logScroll,
+		LogCopied:   time.Now().Before(a.logCopied),
 		AddNotice:   a.addNotice,
 		AddFailed:   a.addFailed,
 		AddBadField: a.addBadField,
@@ -529,7 +617,6 @@ func (a *app) view() gui.View {
 	if pr, ok := a.active(); ok {
 		v.Profile, v.Server = pr.Name, pr.Config.Server
 		v.KillSwitch = pr.Config.KillSwitch != nil && *pr.Config.KillSwitch
-		v.FullTunnel = pr.Config.FullTunnel != nil && *pr.Config.FullTunnel
 		v.AllowCount = len(pr.Config.KillSwitchAllow)
 	}
 	v.Autostart = a.autostart
@@ -575,14 +662,16 @@ func (a *app) profileCount() int {
 }
 
 func (a *app) hits() []gui.Hit {
-	if a.screen == gui.ScreenAdd {
-		return gui.AddLayout(a.editing).Hits()
-	}
-	if a.screen == gui.ScreenSettings {
-		s := gui.SettingsLayout(len(a.profiles.List))
+	switch a.screen {
+	case gui.ScreenAdd:
+		return gui.AddLayout(a.editing, a.winH).Hits()
+	case gui.ScreenSettings:
+		s := gui.SettingsLayout(len(a.profiles.List), a.winH)
 		return append(s.Hits(), s.ScrollHits(a.scrollY)...)
+	case gui.ScreenLog:
+		return gui.LogLayout(a.winH).Hits()
 	}
-	return gui.MainLayout(a.logOpen, a.profileCount()).Hits()
+	return gui.MainLayout(a.profileCount(), a.winH).Hits()
 }
 
 func (a *app) onMouseMove(hwnd windows.HWND, px, py int32) {
@@ -629,24 +718,52 @@ func (a *app) onMouseUp(px, py int32) {
 }
 
 func (a *app) onWheel(delta int16) {
-	if a.screen != gui.ScreenSettings {
+	switch a.screen {
+	case gui.ScreenLog:
+		// Колесо вверх — к старым записям. Три строки на щелчок, как в
+		// любом текстовом окне.
+		a.mu.Lock()
+		a.logScroll += int32(delta) / 40
+		a.mu.Unlock()
+		a.clampScroll()
+		a.invalidate()
+	case gui.ScreenSettings:
+		s := gui.SettingsLayout(len(a.profiles.List), a.winH)
+		max := s.MaxScroll()
+		if max == 0 {
+			return
+		}
+		a.scrollY -= int32(delta) / 4 // 120 единиц на «щелчок» колеса — 30 точек
+		a.clampScroll()
+		// Курсор не двигался, но под ним теперь другая строка.
+		a.hot = gui.ItemNone
+		a.invalidate()
+	}
+}
+
+// clampScroll держит прокрутку настроек и журнала в допустимых пределах —
+// после колеса и после того, как окно стало выше.
+func (a *app) clampScroll() {
+	s := gui.SettingsLayout(a.profileCount(), a.winH)
+	a.scrollY = min(max(a.scrollY, 0), s.MaxScroll())
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, _, _, a.logScroll = gui.LogWindow(a.lines, gui.LogLayout(a.winH).Rows(), a.logChars, a.logScroll)
+}
+
+// copyLog кладёт журнал в буфер обмена целиком — его просят прислать, когда
+// что-то не работает.
+func (a *app) copyLog() {
+	a.mu.Lock()
+	text := strings.Join(a.lines, "\r\n")
+	a.mu.Unlock()
+	if text == "" {
 		return
 	}
-	s := gui.SettingsLayout(len(a.profiles.List))
-	max := s.MaxScroll()
-	if max == 0 {
-		return
+	if setClipboardText(a.hwnd, text) {
+		a.logCopied = time.Now().Add(2 * time.Second)
 	}
-	a.scrollY -= int32(delta) / 4 // 120 единиц на «щелчок» колеса — 30 точек
-	if a.scrollY < 0 {
-		a.scrollY = 0
-	}
-	if a.scrollY > max {
-		a.scrollY = max
-	}
-	// Курсор не двигался, но под ним теперь другая строка.
-	a.hot = gui.ItemNone
-	a.invalidate()
 }
 
 // ---------- действия ----------
@@ -659,7 +776,7 @@ func (a *app) activate(id gui.ItemID) {
 		procShowWindow.Call(uintptr(a.hwnd), swMinimize)
 	case gui.ItemSettings:
 		a.screen, a.scrollY = gui.ScreenSettings, 0
-		a.resize()
+		a.invalidate()
 	case gui.ItemBack:
 		// С экрана добавления возвращаемся туда, откуда его открыли:
 		// «плюс» в шапке и строка в настройках ведут в одно место, но
@@ -670,16 +787,21 @@ func (a *app) activate(id gui.ItemID) {
 		} else {
 			a.screen = gui.ScreenMain
 		}
-		a.resize()
+		a.invalidate()
 	case gui.ItemConnect:
 		a.onConnectClicked()
-	case gui.ItemLogToggle:
-		a.logOpen = !a.logOpen
-		a.resize()
+	case gui.ItemLog:
+		// Журнал открывается с конца: смотрят его ради последних записей.
+		a.mu.Lock()
+		a.logScroll = 0
+		a.mu.Unlock()
+		a.screen = gui.ScreenLog
+		a.invalidate()
+	case gui.ItemLogCopy:
+		a.copyLog()
+		a.invalidate()
 	case gui.ItemKillSwitch:
 		a.toggleSetting("kill_switch")
-	case gui.ItemFullTunnel:
-		a.toggleSetting("full_tunnel")
 	case gui.ItemAutostart:
 		a.toggleAutostart()
 	case gui.ItemAllowEdit:
@@ -843,9 +965,15 @@ const maxLogLines = 400
 
 func (a *app) appendLog(line string) {
 	a.mu.Lock()
-	a.lines = append(a.lines, time.Now().Format("15:04:05")+"  "+line)
+	entry := time.Now().Format("15:04:05") + "  " + line
+	a.lines = append(a.lines, entry)
 	if len(a.lines) > maxLogLines {
 		a.lines = a.lines[len(a.lines)-maxLogLines:]
+	}
+	if a.logScroll > 0 {
+		// Человек читает середину журнала — новая запись не должна сдвигать
+		// её из-под глаз: прокрутка считается от конца и растёт вместе с ним.
+		a.logScroll += int32(len(gui.WrapLog([]string{entry}, max(a.logChars, 20))))
 	}
 	a.mu.Unlock()
 	if a.hwnd != 0 {

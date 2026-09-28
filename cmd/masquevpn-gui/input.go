@@ -64,7 +64,7 @@ func (a *app) onKey(e xproto.KeyPressEvent) {
 	case sym == keyReturn:
 		a.confirmAdd()
 	case sym == keyTab:
-		a.focus = (a.focus + 1) % len(gui.AddLayout(a.editing).Fields)
+		a.focus = (a.focus + 1) % gui.MaxAddFields
 		a.invalidate()
 	case sym == keyBackspace || sym == keyDelete:
 		if s := a.fields[a.focus]; s != "" {
@@ -261,7 +261,7 @@ func (a *app) paintFields(cv *guiraster.Canvas, blink bool) {
 	if a.screen != gui.ScreenAdd {
 		return
 	}
-	l := gui.AddLayout(a.editing)
+	l := gui.AddLayout(a.editing, a.winH)
 	for i, f := range l.Fields {
 		box := l.Edit(f.Box)
 		text := a.fields[i]

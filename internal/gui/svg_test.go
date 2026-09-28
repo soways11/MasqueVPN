@@ -216,7 +216,6 @@ func sampleView() View {
 		Since:      t0.Add(-4*time.Minute - 12*time.Second),
 		LogLines:   []string{"14:01:55  подключение к vpn.example.com:443", "14:02:01  туннель поднят"},
 		KillSwitch: true,
-		FullTunnel: true,
 		AllowCount: 3,
 		Profiles: []ProfileItem{
 			{Name: "Основной", Server: "vpn.example.com:443", Selected: true},
@@ -245,14 +244,14 @@ func TestRenderScreens(t *testing.T) {
 		hot  ItemID
 		h    int32
 	}{
-		{"main-on", sampleView, ItemNone, MainLayout(false, 2).Height},
+		{"main-on", sampleView, ItemNone, DefaultWinH},
 		{"main-off", func() View {
 			v := sampleView()
 			v.State, v.TunAddr, v.Since = Off, "", time.Time{}
 			v.BytesIn, v.BytesOut, v.RateIn, v.RateOut = 0, 0, 0, 0
 			v.Bars = NewMeter(graphPointsForTest).Bars()
 			return v
-		}, ItemConnect, MainLayout(false, 2).Height},
+		}, ItemConnect, DefaultWinH},
 		{"main-error", func() View {
 			// Как в жизни: после неудачи счётчики уже обнулены — сессии,
 			// от которой их считать, не существует.
@@ -262,10 +261,10 @@ func TestRenderScreens(t *testing.T) {
 			v.BytesIn, v.BytesOut, v.RateIn, v.RateOut = 0, 0, 0, 0
 			v.Bars = NewMeter(graphPointsForTest).Bars()
 			return v
-		}, ItemNone, MainLayout(false, 2).Height},
+		}, ItemNone, DefaultWinH},
 		{"main-log", func() View {
 			v := sampleView()
-			v.LogOpen = true
+			v.Screen = ScreenLog
 			v.LogLines = []string{
 				"14:01:55  подключение к vpn.example.com:443",
 				"14:01:56  сессия установлена  transport=h3",
@@ -274,34 +273,53 @@ func TestRenderScreens(t *testing.T) {
 				"14:02:02  DNS уведён в туннель",
 			}
 			return v
-		}, ItemLogToggle, MainLayout(true, 2).Height},
+		}, ItemLogCopy, DefaultWinH},
+		{"log-scrolled", func() View {
+			v := sampleView()
+			v.Screen = ScreenLog
+			for i := 0; i < 80; i++ {
+				v.LogLines = append(v.LogLines, fmt.Sprintf("14:%02d:%02d  запись номер %d  addr=10.7.0.%d", i/60, i%60, i, i))
+			}
+			v.LogScroll, v.LogCopied = 25, true
+			return v
+		}, ItemBack, DefaultWinH},
+		{"main-many", func() View {
+			v := sampleView()
+			for i := 0; i < 7; i++ {
+				v.Profiles = append(v.Profiles, ProfileItem{Name: fmt.Sprintf("запасной %d", i), Server: "vpn.example.org:8443"})
+			}
+			return v
+		}, ItemLog, DefaultWinH},
+		{"main-tall", sampleView, ItemNone, 900},
 		{"add", func() View {
 			v := sampleView()
 			v.Screen = ScreenAdd
 			return v
-		}, ItemAddConfirm, AddLayout(false).Height},
+		}, ItemAddConfirm, DefaultWinH},
 		{"add-error", func() View {
 			v := sampleView()
 			v.Screen = ScreenAdd
 			v.AddNotice = "Без ключа доступа сервер не пустит: его выдаёт clients add"
 			v.AddFailed, v.AddBadField = true, FieldAuthKey+1
 			return v
-		}, ItemNone, AddLayout(false).Height},
+		}, ItemNone, DefaultWinH},
 		{"edit", func() View {
 			v := sampleView()
 			v.Screen, v.Editing = ScreenAdd, true
 			return v
-		}, ItemNone, AddLayout(true).Height},
+		}, ItemNone, MinWinH},
 		{"settings", func() View {
 			v := sampleView()
 			v.Screen = ScreenSettings
 			return v
-		}, ItemKillSwitch, SettingsH},
+		}, ItemKillSwitch, DefaultWinH},
 	}
 
 	for _, c := range cases {
 		s := newSVG(WinW, c.h, 2)
-		Paint(s, c.view(), c.hot, ItemNone, time.Unix(1700000000, 0))
+		v := c.view()
+		v.Height = c.h
+		Paint(s, v, c.hot, ItemNone, time.Unix(1700000000, 0))
 		if s.clips != 0 {
 			t.Errorf("%s: осталось %d незакрытых областей обрезки — часть окна рисовалась бы обрезанной",
 				c.name, s.clips)
@@ -321,8 +339,11 @@ func TestPaintDoesNotPanic(t *testing.T) {
 		{Screen: ScreenSettings},
 		{State: Connecting, Bars: nil, Profiles: nil},
 		{Screen: ScreenSettings, Profiles: make([]ProfileItem, 40)},
+		{Screen: ScreenLog},
+		{Screen: ScreenLog, LogLines: []string{"x"}, LogScroll: 99, Height: 1},
+		{Profiles: make([]ProfileItem, 40), Height: MinWinH},
 	} {
-		s := newSVG(WinW, SettingsH, 1)
+		s := newSVG(WinW, v.H(), 1)
 		Paint(s, v, ItemNone, ItemNone, time.Unix(1700000000, 0))
 	}
 }

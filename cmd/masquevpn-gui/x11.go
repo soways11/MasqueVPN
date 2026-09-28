@@ -66,6 +66,11 @@ type window struct {
 	shaped bool
 	// scale — во сколько раз окно крупнее логической раскладки.
 	scale float64
+
+	// resizeCursor — курсор «тянуть вверх-вниз» над нижней кромкой; 0 —
+	// не создался. resizing — он сейчас стоит.
+	resizeCursor xproto.Cursor
+	resizing     bool
 }
 
 func openWindow(title string, w, h int, scale float64) (*window, error) {
@@ -124,6 +129,7 @@ func openWindow(title string, w, h int, scale float64) (*window, error) {
 	win.closeOnDelete()
 	win.shaped = shape.Init(conn) == nil
 	win.round(w, h)
+	win.resizeCursor = win.makeCursor(116) // XC_sb_v_double_arrow
 
 	// Длина запроса считается в четырёхбайтовых словах; вычитаем запас под
 	// заголовок самого запроса.
@@ -242,7 +248,66 @@ func (w *window) closeOnDelete() {
 		w.atoms.wmProtocols, xproto.AtomAtom, 32, 1, data)
 }
 
-// resize меняет размер окна: экраны у нас разной высоты.
+// setSizeHints сообщает менеджеру окон пределы размера: ширина неизменна,
+// высота — от minH до maxH. Без подсказок WM растягивал бы окно и вширь.
+func (w *window) setSizeHints(width, minH, maxH int) {
+	const pMinSize, pMaxSize = 1 << 4, 1 << 5
+	hints := make([]uint32, 18)
+	hints[0] = pMinSize | pMaxSize
+	hints[5], hints[6] = uint32(width), uint32(minH)
+	hints[7], hints[8] = uint32(width), uint32(maxH)
+	data := make([]byte, len(hints)*4)
+	for i, v := range hints {
+		xgb.Put32(data[i*4:], v)
+	}
+	xproto.ChangeProperty(w.conn, xproto.PropModeReplace, w.id,
+		xproto.AtomWmNormalHints, xproto.AtomWmSizeHints, 32, uint32(len(hints)), data)
+}
+
+// makeCursor создаёт стандартный курсор X по номеру из шрифта «cursor».
+func (w *window) makeCursor(glyph uint16) xproto.Cursor {
+	font, err := xproto.NewFontId(w.conn)
+	if err != nil {
+		return 0
+	}
+	if err := xproto.OpenFontChecked(w.conn, font, uint16(len("cursor")), "cursor").Check(); err != nil {
+		return 0
+	}
+	defer xproto.CloseFont(w.conn, font)
+	c, err := xproto.NewCursorId(w.conn)
+	if err != nil {
+		return 0
+	}
+	if err := xproto.CreateGlyphCursorChecked(w.conn, c, font, font, glyph, glyph+1,
+		0, 0, 0, 0xffff, 0xffff, 0xffff).Check(); err != nil {
+		return 0
+	}
+	return c
+}
+
+// setResizeCursor ставит курсор растяжения над нижней кромкой и убирает его
+// в остальном окне — иначе не догадаться, что окно тянется.
+func (w *window) setResizeCursor(on bool) {
+	if w.resizeCursor == 0 || on == w.resizing {
+		return
+	}
+	w.resizing = on
+	c := uint32(0) // None — курсор родительского окна
+	if on {
+		c = uint32(w.resizeCursor)
+	}
+	xproto.ChangeWindowAttributes(w.conn, w.id, xproto.CwCursor, []uint32{c})
+}
+
+// startResize просит менеджер окон растянуть окно за нижний край — тем же
+// способом, что и перетаскивание: рамки, за которую он тянул бы сам, у
+// окна нет.
+func (w *window) startResize(rootX, rootY int16) {
+	const moveResizeSizeBottom = 5 // _NET_WM_MOVERESIZE_SIZE_BOTTOM
+	w.moveResize(rootX, rootY, moveResizeSizeBottom)
+}
+
+// resize меняет размер окна (после смены масштаба или ограничения высоты).
 func (w *window) resize(width, height int) {
 	xproto.ConfigureWindow(w.conn, w.id,
 		xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
@@ -273,7 +338,11 @@ func (w *window) round(width, height int) {
 // startDrag просит менеджер окон подвинуть окно за курсором.
 func (w *window) startDrag(rootX, rootY int16) {
 	const moveResizeMove = 8 // _NET_WM_MOVERESIZE_MOVE
+	w.moveResize(rootX, rootY, moveResizeMove)
+}
 
+// moveResize — запрос _NET_WM_MOVERESIZE: подвинуть или растянуть окно.
+func (w *window) moveResize(rootX, rootY int16, direction uint32) {
 	// Кнопку нужно отпустить до начала перетаскивания, иначе WM не
 	// перехватит указатель.
 	xproto.UngrabPointer(w.conn, xproto.TimeCurrentTime)
@@ -283,7 +352,7 @@ func (w *window) startDrag(rootX, rootY int16) {
 		Window: w.id,
 		Type:   w.atoms.netWMMoveResize,
 		Data: xproto.ClientMessageDataUnionData32New([]uint32{
-			uint32(rootX), uint32(rootY), moveResizeMove, 1, 1,
+			uint32(rootX), uint32(rootY), direction, 1, 1,
 		}),
 	}
 	xproto.SendEvent(w.conn, false, w.screen.Root,

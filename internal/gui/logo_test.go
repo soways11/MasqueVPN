@@ -26,7 +26,7 @@ func TestLogoPixels(t *testing.T) {
 
 // Знак в шапке не налезает на слово и не заходит в полосу заголовка.
 func TestMainMark(t *testing.T) {
-	m := MainLayout(false, 1)
+	m := MainLayout(1, DefaultWinH)
 	if overlap(m.Mark, m.Logo) {
 		t.Fatalf("знак %v налезает на слово %v", m.Mark, m.Logo)
 	}

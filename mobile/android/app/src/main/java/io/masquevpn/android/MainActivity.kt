@@ -57,10 +57,7 @@ class MainActivity : Activity() {
     private lateinit var profilesBox: LinearLayout
     private lateinit var empty: View
     private lateinit var logSummary: TextView
-    private lateinit var logChevron: ImageView
-    private lateinit var logView: TextView
 
-    private var logOpen = false
     private var shownProfiles = ""
 
     private val ui = Handler(Looper.getMainLooper())
@@ -91,10 +88,6 @@ class MainActivity : Activity() {
         profilesBox = findViewById(R.id.profiles)
         empty = findViewById(R.id.empty)
         logSummary = findViewById(R.id.log_summary)
-        logChevron = findViewById(R.id.log_chevron)
-        logView = findViewById(R.id.log)
-
-        logOpen = savedInstanceState?.getBoolean(STATE_LOG_OPEN) ?: false
 
         findViewById<View>(R.id.add).setOnClickListener { openAdd(null) }
         findViewById<View>(R.id.settings).setOnClickListener {
@@ -103,16 +96,10 @@ class MainActivity : Activity() {
         empty.setOnClickListener { openAdd(null) }
         connect.setOnClickListener { onConnectClicked() }
         findViewById<View>(R.id.log_row).setOnClickListener {
-            logOpen = !logOpen
-            render()
+            startActivity(Intent(this, LogActivity::class.java))
         }
 
         askNotificationPermission()
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putBoolean(STATE_LOG_OPEN, logOpen)
     }
 
     override fun onResume() {
@@ -397,13 +384,6 @@ class MainActivity : Activity() {
             val last = lines.last()
             if (last.length >= 5) getString(R.string.log_last, count, last.substring(0, 5)) else count
         }
-        logChevron.rotation = if (logOpen) 180f else 0f
-        if (logOpen) {
-            logView.visibility = View.VISIBLE
-            logView.text = lines.takeLast(LOG_SHOWN).joinToString("\n")
-        } else {
-            logView.visibility = View.GONE
-        }
     }
 
     // ---------- подключение ----------
@@ -465,8 +445,6 @@ class MainActivity : Activity() {
         private const val REQUEST_VPN = 1
         private const val REQUEST_NOTIFY = 3
         private const val TICK_MS = 1000L
-        private const val LOG_SHOWN = 40
-        private const val STATE_LOG_OPEN = "log_open"
 
         private const val GROUP_USE = 1
         private const val GROUP_EDIT = 2

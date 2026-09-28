@@ -41,6 +41,7 @@ var (
 	procMessageBox       = user32.NewProc("MessageBoxW")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 	procSetWindowPos     = user32.NewProc("SetWindowPos")
+	procGetWindowRect    = user32.NewProc("GetWindowRect")
 	procDeleteObject     = gdi32.NewProc("DeleteObject")
 
 	// Скругление окна. Область (region) режет окно по форме — способ старый
@@ -146,9 +147,13 @@ const (
 	// Окно без системной рамки: заголовок нарисован свой.
 	wsPopup       = 0x80000000
 	wsMinimizeBox = 0x00020000
-	csHRedraw     = 0x0002
-	csVRedraw     = 0x0001
-	csDropShadow  = 0x00020000 // тень под окном — вместо потерянной рамки
+	// WS_THICKFRAME — только ради того, чтобы Windows позволила тянуть окно
+	// за край: без него запрос на растяжение (HTBOTTOM) игнорируется. Саму
+	// рамку, которую он добавляет, убирает ответ на WM_NCCALCSIZE.
+	wsThickFrame = 0x00040000
+	csHRedraw    = 0x0002
+	csVRedraw    = 0x0001
+	csDropShadow = 0x00020000 // тень под окном — вместо потерянной рамки
 
 	wmCreate        = 0x0001
 	wmPaint         = 0x000F
@@ -162,7 +167,18 @@ const (
 	wmNCLButtonDown = 0x00A1
 
 	htCaption = 2
+	htClient  = 1
+	htBottom  = 15
 	tmeLeave  = 0x00000002
+
+	// Растяжение окна за нижний край.
+	wmSize          = 0x0005
+	wmGetMinMaxInfo = 0x0024
+	wmNCCalcSize    = 0x0083
+	wmNCHitTest     = 0x0084
+	wmExitSizeMove  = 0x0232
+	sizeMinimized   = 1
+	smCYMaximized   = 62 // высота развёрнутого окна: экран минус панель задач
 
 	// Область уведомлений.
 	nimAdd    = 0x00000000
@@ -269,6 +285,15 @@ type wndClassEx struct {
 type point struct{ X, Y int32 }
 
 type rect struct{ Left, Top, Right, Bottom int32 }
+
+// minMaxInfo — MINMAXINFO: пределы размера окна при растяжении.
+type minMaxInfo struct {
+	Reserved     point
+	MaxSize      point
+	MaxPosition  point
+	MinTrackSize point
+	MaxTrackSize point
+}
 
 var procMoveMemory = kernel32.NewProc("RtlMoveMemory")
 

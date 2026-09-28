@@ -55,6 +55,10 @@
             android:name=".SettingsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".LogActivity"
+            android:exported="false" />
+
         <!--
             Служба VPN. BIND_VPN_SERVICE обязано стоять именно здесь: им система
             гарантирует, что к интерфейсу подключится только тот, кого выбрал

@@ -10,6 +10,7 @@ package gui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -47,13 +48,15 @@ func Paint(cv Canvas, v View, hot, pressed ItemID, now time.Time) {
 		paintSettings(cv, v, hot, pressed)
 	case ScreenAdd:
 		paintAdd(cv, v, hot, pressed)
+	case ScreenLog:
+		paintLog(cv, v, hot, pressed)
 	default:
 		paintMain(cv, v, hot, pressed, now)
 	}
 }
 
 func paintMain(cv Canvas, v View, hot, pressed ItemID, now time.Time) {
-	m := MainLayout(v.LogOpen, len(v.Profiles))
+	m := MainLayout(len(v.Profiles), v.H())
 	paintCaption(cv, m.Caption, hot)
 
 	cv.DrawImage(m.Mark, LogoPixels(int(cv.Px(m.Mark.W))))
@@ -88,7 +91,7 @@ func paintMain(cv Canvas, v View, hot, pressed ItemID, now time.Time) {
 	}
 
 	paintProfileList(cv, v, m, hot)
-	paintLogRow(cv, v, m, hot == ItemLogToggle)
+	paintLogRow(cv, v, m, hot == ItemLog)
 
 	cv.Text(AppName+" · MASQUE CONNECT-IP", FaceFooter, m.Footer, ColorMuted, AlignCenter)
 }
@@ -244,39 +247,80 @@ func paintLogRow(cv Canvas, v View, m Main, hot bool) {
 	}
 	cv.Text(sub, FaceSmall, Rect{X: in.X, Y: in.Y + 18, W: in.W - 30, H: 14}, ColorDim, AlignLeft)
 
-	chev := Rect{X: m.LogRow.Right() - 28, Y: m.LogRow.Y + m.LogRow.H/2 - 3, W: 10, H: 6}
-	drawChevron(cv, chev, ColorDim, v.LogOpen)
-
-	if v.LogOpen && !m.LogBox.Empty() {
-		card(cv, m.LogBox, RadiusSm, ColorBG.Lighten(0.02), ColorBorderDim)
-		paintLogLines(cv, v.LogLines, m.LogBox)
-	}
+	// Стрелка вправо, а не уголок: строка теперь ведёт на свой экран, а не
+	// раскрывает блок под собой.
+	drawArrow(cv, Rect{X: m.LogRow.Right() - 30, Y: m.LogRow.Y + m.LogRow.H/2 - 4, W: 9, H: 8}, ColorDim)
 }
 
-// paintLogLines печатает хвост журнала — столько строк, сколько влезло.
+// paintLog рисует экран журнала: заголовок, «Копировать», строки с
+// прокруткой.
+func paintLog(cv Canvas, v View, hot, pressed ItemID) {
+	l := LogLayout(v.H())
+	paintCaption(cv, l.Caption, hot)
+	paintIconButton(cv, l.Back, hot == ItemBack, func(r Rect) {
+		drawArrowLeft(cv, Rect{X: r.X + 10, Y: r.Y + r.H/2 - 4, W: 9, H: 8}, ColorText)
+	})
+	cv.Text("Журнал", FaceTitle, l.Title, ColorText, AlignLeft)
+	copyLabel := "Копировать"
+	if v.LogCopied {
+		copyLabel = "Скопировано"
+	}
+	paintSecondaryButton(cv, l.Copy, copyLabel, hot == ItemLogCopy, pressed == ItemLogCopy)
+
+	card(cv, l.Box, RadiusSm, ColorBG.Lighten(0.02), ColorBorderDim)
+	if len(v.LogLines) == 0 {
+		cv.Text("Записей пока нет", FaceSmall, l.Box, ColorDim, AlignCenter)
+	} else {
+		paintLogLines(cv, v.LogLines, l, v.LogScroll)
+	}
+	cv.Text(AppName+" · MASQUE CONNECT-IP", FaceFooter, l.Footer, ColorMuted, AlignCenter)
+}
+
+// paintLogLines печатает видимую часть журнала и полосу прокрутки.
 //
 // Длинные записи переносятся, а не обрезаются. Обрезание стоило разбора
 // вживую: сообщение «ошибка: подключение: utlsquic: QUIC dial …» кончалось
 // ровно там, где начиналась причина.
-func paintLogLines(cv Canvas, lines []string, box Rect) {
-	const lineH = 17
-	in := box.Inset(12)
-	max := int(in.H / lineH)
-	if max <= 0 {
+func paintLogLines(cv Canvas, lines []string, l Log, scroll int32) {
+	rows := l.Rows()
+	if rows <= 0 {
 		return
 	}
-
-	wrapped := WrapLog(lines, maxLogLineChars)
-	if len(wrapped) > max {
-		wrapped = wrapped[len(wrapped)-max:]
-	}
+	in := l.Box.Inset(12)
+	shown, first, total, _ := LogWindow(lines, rows, LogChars(cv), scroll)
 	cv.Clip(in)
-	defer cv.Unclip()
-	for i, s := range wrapped {
+	for i, s := range shown {
 		cv.Text(s, FaceMono,
-			Rect{X: in.X, Y: in.Y + int32(i)*lineH, W: in.W, H: lineH},
+			Rect{X: in.X, Y: in.Y + int32(i)*LogLineH, W: in.W, H: LogLineH},
 			ColorDim, AlignLeft)
 	}
+	cv.Unclip()
+	// Полоса прокрутки — только когда есть что прокручивать: по ней видно,
+	// что строк больше, чем на экране, и где мы в журнале.
+	if total > rows {
+		track := Rect{X: l.Box.Right() - 7, Y: in.Y, W: 3, H: in.H}
+		thumbH := max(track.H*int32(rows)/int32(total), 16)
+		thumbY := track.Y + (track.H-thumbH)*int32(first)/int32(max(total-rows, 1))
+		cv.Round(track, 1, ColorSurface2)
+		cv.Round(Rect{X: track.X, Y: thumbY, W: track.W, H: thumbH}, 1, ColorDim)
+	}
+}
+
+// LogChars — сколько знаков моноширинного шрифта помещается в строку
+// журнала на этом холсте.
+//
+// Считается измерением, а не заданным числом: моноширинный шрифт в Windows
+// (Consolas) и в Linux (DejaVu Sans Mono) разной ширины, и строка, выверенная
+// под один, у другого уезжала за рамку — обрезанными оказывались ровно
+// концы сообщений об ошибках. Окно запоминает это число при отрисовке, чтобы
+// прокрутка колесом знала, сколько строк получится после переноса.
+func LogChars(cv Canvas) int {
+	w := LogLayout(DefaultWinH).Box.Inset(12).W
+	per := cv.Width(strings.Repeat("ш", 20), FaceMono) / 20
+	if per <= 0 {
+		return maxLogLineChars
+	}
+	return max(int(float64(w)/per), 20)
 }
 
 // WrapLog разбивает записи журнала на строки не длиннее width знаков.
@@ -313,7 +357,7 @@ func WrapLog(lines []string, width int) []string {
 // ---------- настройки ----------
 
 func paintSettings(cv Canvas, v View, hot, pressed ItemID) {
-	s := SettingsLayout(len(v.Profiles))
+	s := SettingsLayout(len(v.Profiles), v.H())
 	paintCaption(cv, s.Caption, hot)
 
 	paintIconButton(cv, s.Back, hot == ItemBack, func(r Rect) {
@@ -333,9 +377,6 @@ func paintSettings(cv Canvas, v View, hot, pressed ItemID) {
 		killSwitchHint(v), v.KillSwitch, hot == ItemKillSwitch)
 	paintLinkRow(cv, move(s.Allow), "Исключения",
 		allowHint(v.AllowCount), "Изменить", hot == ItemAllowEdit)
-	paintToggleRow(cv, move(s.FullTunnel), "Весь трафик через VPN",
-		"Иначе — только маршруты из профиля", v.FullTunnel,
-		hot == ItemFullTunnel)
 
 	section(s.SectProfiles, "Профили")
 	for i, pr := range v.Profiles {
@@ -456,7 +497,7 @@ func paintAddRow(cv Canvas, r Rect, hot bool) {
 // paintAdd рисует экран добавления. Само поле ввода не рисуется: там стоит
 // настоящий системный элемент, и здесь под него оставляется рамка.
 func paintAdd(cv Canvas, v View, hot, pressed ItemID) {
-	a := AddLayout(v.Editing)
+	a := AddLayout(v.Editing, v.H())
 	paintCaption(cv, a.Caption, hot)
 
 	paintIconButton(cv, a.Back, hot == ItemBack, func(r Rect) {
@@ -495,7 +536,7 @@ func paintAdd(cv Canvas, v View, hot, pressed ItemID) {
 		}
 		cv.Round(a.Delete, a.Delete.H/2, fill)
 		cv.Border(a.Delete, a.Delete.H/2, ColorDanger.Darken(0.45), 1)
-		cv.Text("Удалить профиль", FaceRow, a.Delete, ColorDanger, AlignCenter)
+		cv.Text("Удалить", FaceRow, a.Delete, ColorDanger, AlignCenter)
 	}
 
 	notice, color := v.AddNotice, ColorDim
@@ -648,22 +689,6 @@ func drawArrowLeft(cv Canvas, r Rect, col Color) {
 	cv.FillPixels(x, mid, w, t, col)
 	cv.Quad([4][2]int32{{x + h/2, y}, {x + h/2 - t, y}, {x, mid}, {x + t, mid}}, col)
 	cv.Quad([4][2]int32{{x, mid}, {x + t, mid}, {x + h/2 - t, y + h}, {x + h/2, y + h}}, col)
-}
-
-// drawChevron — уголок вниз (журнал свёрнут) или вверх (раскрыт).
-func drawChevron(cv Canvas, r Rect, col Color, up bool) {
-	t := cv.Px(2)
-	if t < 2 {
-		t = 2
-	}
-	x, y, w, h := cv.Px(r.X), cv.Px(r.Y), cv.Px(r.W), cv.Px(r.H)
-	if up {
-		cv.Quad([4][2]int32{{x, y + h}, {x + w/2, y}, {x + w/2, y + t}, {x + t, y + h}}, col)
-		cv.Quad([4][2]int32{{x + w, y + h}, {x + w/2, y}, {x + w/2, y + t}, {x + w - t, y + h}}, col)
-		return
-	}
-	cv.Quad([4][2]int32{{x, y}, {x + w/2, y + h}, {x + w/2, y + h - t}, {x + t, y}}, col)
-	cv.Quad([4][2]int32{{x + w, y}, {x + w/2, y + h}, {x + w/2, y + h - t}, {x + w - t, y}}, col)
 }
 
 // drawDots — три точки: меню строки.

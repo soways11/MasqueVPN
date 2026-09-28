@@ -2,7 +2,9 @@ package gui
 
 import (
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -16,15 +18,18 @@ func overlap(a, b Rect) bool {
 // Это та ошибка, которую на своей машине не видно: при 100% масштаба всё
 // помещается, а у человека со 150% нижняя строка уезжает под край.
 func TestMainLayoutFits(t *testing.T) {
-	for _, logOpen := range []bool{false, true} {
-		for _, n := range []int{0, 1, 3, 9} {
-			m := MainLayout(logOpen, n)
+	for _, h := range []int32{MinWinH, DefaultWinH, 900} {
+		for _, n := range []int{0, 1, 3, 9, 30} {
+			m := MainLayout(n, h)
+			if m.Height != h {
+				t.Fatalf("h=%d: раскладка посчитана для высоты %d", h, m.Height)
+			}
 			named := map[string]Rect{
 				"логотип": m.Logo, "плюс": m.Plus, "шестерёнка": m.Gear,
 				"статус": m.StatusText, "сессия": m.Session, "кнопка": m.Button,
 				"плитка вниз": m.TileDown, "плитка вверх": m.TileUp,
 				"цифры": m.Stats, "профили": m.SectProfiles, "ещё профили": m.MoreProfiles,
-				"журнал": m.LogRow, "поле журнала": m.LogBox, "подпись": m.Footer,
+				"журнал": m.LogRow, "подпись": m.Footer,
 				"закрыть": m.Caption.Close,
 			}
 			for i, r := range m.Profiles {
@@ -35,22 +40,93 @@ func TestMainLayoutFits(t *testing.T) {
 					continue
 				}
 				if r.X < 0 || r.Y < 0 {
-					t.Errorf("n=%d logOpen=%v: %s начинается за пределами окна: %+v", n, logOpen, name, r)
+					t.Errorf("h=%d n=%d: %s начинается за пределами окна: %+v", h, n, name, r)
 				}
 				if r.Right() > WinW {
-					t.Errorf("n=%d logOpen=%v: %s выходит вправо: %d > %d", n, logOpen, name, r.Right(), WinW)
+					t.Errorf("h=%d n=%d: %s выходит вправо: %d > %d", h, n, name, r.Right(), WinW)
 				}
-				if r.Bottom() > m.Height {
-					t.Errorf("n=%d logOpen=%v: %s выходит вниз: %d > %d", n, logOpen, name, r.Bottom(), m.Height)
+				if r.Bottom() > h {
+					t.Errorf("h=%d n=%d: %s выходит вниз: %d > %d", h, n, name, r.Bottom(), h)
 				}
 			}
 		}
 	}
 }
 
+// TestHeightIsFixed — высоту окна задаёт окно, а не содержимое: ни число
+// профилей, ни экран её не меняют. Раньше окно прыгало при каждом переходе.
+func TestHeightIsFixed(t *testing.T) {
+	for _, h := range []int32{MinWinH, DefaultWinH, 777} {
+		for _, n := range []int{0, 1, 4, 12} {
+			if got := MainLayout(n, h).Height; got != h {
+				t.Errorf("главный экран, %d профилей: высота %d вместо %d", n, got, h)
+			}
+			if got := SettingsLayout(n, h).Footer.Bottom(); got != FooterRect(h).Bottom() {
+				t.Errorf("настройки, %d профилей: подпись на %d", n, got)
+			}
+		}
+		for _, e := range []bool{false, true} {
+			if got := AddLayout(e, h).Height; got != h {
+				t.Errorf("добавление (правка=%v): высота %d вместо %d", e, got, h)
+			}
+		}
+	}
+	// Подпись стоит на одном месте на всех экранах: при переходе ничего не
+	// дёргается.
+	h := int32(DefaultWinH)
+	foot := FooterRect(h)
+	for name, r := range map[string]Rect{
+		"главный": MainLayout(2, h).Footer, "настройки": SettingsLayout(2, h).Footer,
+		"добавление": AddLayout(false, h).Footer, "журнал": LogLayout(h).Footer,
+	} {
+		if r != foot {
+			t.Errorf("%s: подпись %+v, на остальных %+v", name, r, foot)
+		}
+	}
+}
+
+// TestClampHeight — мусор из файла настроек и крайности не ломают окно.
+func TestClampHeight(t *testing.T) {
+	for in, want := range map[int32]int32{
+		0: DefaultWinH, -5: DefaultWinH, 10: MinWinH, MinWinH: MinWinH,
+		700: 700, MaxWinH + 1: MaxWinH,
+	} {
+		if got := ClampHeight(in); got != want {
+			t.Errorf("ClampHeight(%d) = %d, ожидалось %d", in, got, want)
+		}
+	}
+	if !OnResizeEdge(DefaultWinH-1, DefaultWinH) || OnResizeEdge(DefaultWinH-ResizeEdge-1, DefaultWinH) {
+		t.Error("полоса растяжения не у нижнего края")
+	}
+	// Полоса растяжения не накрывает ничего нажимаемого: подпись — не кнопка,
+	// а строка журнала кончается выше.
+	if m := MainLayout(2, DefaultWinH); m.LogRow.Bottom() > DefaultWinH-ResizeEdge {
+		t.Error("строка журнала заходит в полосу растяжения")
+	}
+}
+
+// TestMinHeightFitsEverything — MinWinH не выдуман: на этой высоте целиком
+// помещается правка профиля, главный экран показывает хотя бы один профиль,
+// а журнал — разумное число строк.
+func TestMinHeightFitsEverything(t *testing.T) {
+	for _, e := range []bool{false, true} {
+		a := AddLayout(e, MinWinH)
+		if a.ContentBottom > a.Footer.Y-8 {
+			t.Errorf("правка=%v: форма (до %d) налезает на подпись (%d) при высоте %d",
+				e, a.ContentBottom, a.Footer.Y, MinWinH)
+		}
+	}
+	if m := MainLayout(3, MinWinH); len(m.Profiles) < 1 {
+		t.Error("при наименьшей высоте на главном экране не видно ни одного профиля")
+	}
+	if rows := LogLayout(MinWinH).Rows(); rows < 20 {
+		t.Errorf("журнал при наименьшей высоте показывает %d строк", rows)
+	}
+}
+
 // TestMainLayoutNoOverlap — соседние блоки не налезают друг на друга.
 func TestMainLayoutNoOverlap(t *testing.T) {
-	m := MainLayout(true, 3)
+	m := MainLayout(3, 900)
 	blocks := []struct {
 		name string
 		r    Rect
@@ -58,7 +134,7 @@ func TestMainLayoutNoOverlap(t *testing.T) {
 		{"статус", m.StatusText}, {"кнопка", m.Button},
 		{"плитка вниз", m.TileDown}, {"плитка вверх", m.TileUp},
 		{"цифры", m.Stats}, {"метка профилей", m.SectProfiles},
-		{"строка журнала", m.LogRow}, {"поле журнала", m.LogBox}, {"подпись", m.Footer},
+		{"строка журнала", m.LogRow}, {"ещё профили", m.MoreProfiles}, {"подпись", m.Footer},
 	}
 	for i, r := range m.Profiles {
 		blocks = append(blocks, struct {
@@ -88,42 +164,49 @@ func TestMainLayoutNoOverlap(t *testing.T) {
 	}
 }
 
-// TestMainProfileList — список профилей растит окно, но не бесконечно:
-// после потолка появляется строка «ещё N — в настройках».
+// TestMainProfileList — профили занимают место между цифрами и журналом:
+// сколько влезло — столько показано, остальные — строкой «ещё N — в
+// настройках». Окно ради них не растёт.
 func TestMainProfileList(t *testing.T) {
-	one, three := MainLayout(false, 1), MainLayout(false, 3)
-	if len(one.Profiles) != 1 || len(three.Profiles) != 3 {
-		t.Fatalf("строк в списке: %d и %d", len(one.Profiles), len(three.Profiles))
+	one, two := MainLayout(1, DefaultWinH), MainLayout(2, DefaultWinH)
+	if len(one.Profiles) != 1 || len(two.Profiles) != 2 {
+		t.Fatalf("строк в списке: %d и %d", len(one.Profiles), len(two.Profiles))
 	}
-	if three.Height <= one.Height {
-		t.Errorf("три профиля не подняли высоту окна: %d → %d", one.Height, three.Height)
-	}
-	if !one.MoreProfiles.Empty() || !three.MoreProfiles.Empty() {
+	if !one.MoreProfiles.Empty() || !two.MoreProfiles.Empty() {
 		t.Error("строка «ещё» появилась, хотя все профили влезли")
 	}
 
-	many := MainLayout(false, 9)
-	if len(many.Profiles) != MaxMainProfiles {
-		t.Errorf("показано %d профилей, потолок %d", len(many.Profiles), MaxMainProfiles)
+	many := MainLayout(9, DefaultWinH)
+	if len(many.Profiles) == 0 || len(many.Profiles) >= 9 {
+		t.Errorf("показано %d профилей из 9 при высоте %d", len(many.Profiles), DefaultWinH)
 	}
 	if many.MoreProfiles.Empty() {
 		t.Error("при девяти профилях нет строки «ещё N — в настройках»")
 	}
-	if many.Height > MaxMainProfiles*(RowH+RowGap)+600 {
-		t.Errorf("окно выросло сверх ожидаемого: %d", many.Height)
+	last := many.MoreProfiles
+	if last.Bottom() > many.LogRow.Y {
+		t.Errorf("строка «ещё» (%+v) налезает на журнал (%+v)", last, many.LogRow)
+	}
+	// Выше окно — больше профилей на главном экране.
+	if tall := MainLayout(9, 900); len(tall.Profiles) <= len(many.Profiles) {
+		t.Errorf("высокое окно показывает %d профилей, обычное %d", len(tall.Profiles), len(many.Profiles))
 	}
 
 	// Без профилей список пуст, а окно всё равно собирается.
-	none := MainLayout(false, 0)
-	if len(none.Profiles) != 0 || none.Height <= 0 {
+	none := MainLayout(0, DefaultWinH)
+	if len(none.Profiles) != 0 || !none.MoreProfiles.Empty() {
 		t.Errorf("пустой список сломал раскладку: %+v", none)
+	}
+	// Строка журнала прижата к низу при любом числе профилей.
+	if none.LogRow != many.LogRow {
+		t.Error("строка журнала сдвигается от числа профилей")
 	}
 }
 
 // TestMainProfileHits — по строке профиля можно нажать, и нажатие ведёт
 // именно к тому профилю, который под курсором.
 func TestMainProfileHits(t *testing.T) {
-	m := MainLayout(false, 3)
+	m := MainLayout(3, 900)
 	got := map[int]Rect{}
 	for _, h := range m.Hits() {
 		if i, ok := ProfileIndex(h.ID); ok {
@@ -164,7 +247,7 @@ func TestMainProfileHits(t *testing.T) {
 
 	// Строка «ещё N» ведёт в настройки — иначе она выглядела бы кнопкой,
 	// которая ничего не делает.
-	many := MainLayout(false, 9)
+	many := MainLayout(9, DefaultWinH)
 	found := false
 	for _, h := range many.Hits() {
 		if h.ID == ItemSettings && h.Rect == many.MoreProfiles {
@@ -176,32 +259,78 @@ func TestMainProfileHits(t *testing.T) {
 	}
 }
 
-// TestMainLogTogglesHeight — раскрытый журнал добавляет окну высоты, и
-// ровно один раз.
-func TestMainLogTogglesHeight(t *testing.T) {
-	closed, open := MainLayout(false, 2), MainLayout(true, 2)
-	if !closed.LogBox.Empty() {
-		t.Error("свёрнутый журнал занимает место")
+// TestLogScreen — журнал занимает весь экран, у него есть «назад» и
+// «копировать», и нажатия попадают туда, где нарисовано.
+func TestLogScreen(t *testing.T) {
+	for _, h := range []int32{MinWinH, DefaultWinH, 1000} {
+		l := LogLayout(h)
+		for name, r := range map[string]Rect{"назад": l.Back, "копировать": l.Copy, "строки": l.Box, "подпись": l.Footer} {
+			if r.Empty() || r.X < 0 || r.Right() > WinW || r.Bottom() > h {
+				t.Errorf("h=%d: %s вне окна: %+v", h, name, r)
+			}
+		}
+		if overlap(l.Box, l.Footer) || overlap(l.Copy, l.Title) || overlap(l.Box, l.Copy) {
+			t.Errorf("h=%d: элементы журнала наложились", h)
+		}
+		want := map[ItemID]Rect{ItemClose: l.Caption.Close, ItemMinimize: l.Caption.Minimize,
+			ItemBack: l.Back, ItemLogCopy: l.Copy}
+		got := map[ItemID]Rect{}
+		for _, hit := range l.Hits() {
+			got[hit.ID] = hit.Rect
+		}
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("области нажатия журнала: %+v", got)
+		}
 	}
-	if open.Height <= closed.Height {
-		t.Errorf("раскрытие журнала не увеличило окно: %d → %d", closed.Height, open.Height)
+	// Выше окно — больше строк.
+	if LogLayout(900).Rows() <= LogLayout(DefaultWinH).Rows() {
+		t.Error("высокое окно не показывает больше строк журнала")
 	}
-	if open.LogBox.H != LogBoxH {
-		t.Errorf("высота поля журнала %d, ожидалась %d", open.LogBox.H, LogBoxH)
+}
+
+// TestLogWindow — прокрутка журнала считается от конца: без прокрутки видно
+// последние строки, прокрутка вверх сдвигает окно, и за края она не уходит.
+func TestLogWindow(t *testing.T) {
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, fmt.Sprintf("12:00:%02d  запись %d", i, i))
 	}
-	// Верхняя часть окна от раскрытия не сдвигается.
-	if open.Button != closed.Button || open.Stats != closed.Stats {
-		t.Error("раскрытие журнала сдвинуло кнопку или цифры")
+	shown, first, total, sc := LogWindow(lines, 10, 0, 0)
+	if total != 50 || first != 40 || len(shown) != 10 || sc != 0 || shown[9] != lines[49] {
+		t.Fatalf("хвост: first=%d total=%d n=%d scroll=%d last=%q", first, total, len(shown), sc, shown[len(shown)-1])
 	}
-	if again := MainLayout(true, 2); !reflect.DeepEqual(again, open) {
-		t.Error("раскладка зависит не только от аргументов")
+	shown, first, _, sc = LogWindow(lines, 10, 0, 5)
+	if first != 35 || shown[0] != lines[35] || sc != 5 {
+		t.Fatalf("прокрутка на 5: first=%d scroll=%d", first, sc)
+	}
+	_, first, _, sc = LogWindow(lines, 10, 0, 1000)
+	if first != 0 || sc != 40 {
+		t.Fatalf("прокрутка за начало: first=%d scroll=%d", first, sc)
+	}
+	_, _, _, sc = LogWindow(lines, 10, 0, -3)
+	if sc != 0 {
+		t.Fatalf("отрицательная прокрутка: %d", sc)
+	}
+	// Строк меньше, чем места, — прокручивать нечего.
+	shown, first, _, sc = LogWindow(lines[:3], 10, 0, 7)
+	if len(shown) != 3 || first != 0 || sc != 0 {
+		t.Fatalf("короткий журнал: n=%d first=%d scroll=%d", len(shown), first, sc)
+	}
+	// Длинная запись переносится, и перенос учитывается в прокрутке.
+	long := []string{"12:00:00  " + strings.Repeat("а", 3*maxLogLineChars)}
+	if _, _, total, _ := LogWindow(long, 10, 0, 0); total < 3 {
+		t.Fatalf("длинная запись не перенесена: %d строк", total)
+	}
+	// Уже строка — больше строк после переноса: прокрутка это учитывает.
+	if _, _, narrow, _ := LogWindow(long, 10, 30, 0); narrow <= 3 {
+		t.Fatalf("при 30 знаках в строке запись заняла %d строк", narrow)
 	}
 }
 
 // TestStatCellsCoverStats — три ячейки делят блок цифр без щелей и нахлёстов.
 // 392 на три нацело не делится, и остаток обязан достаться последней.
 func TestStatCellsCoverStats(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	if m.StatCells[0].X != m.Stats.X {
 		t.Error("первая ячейка не начинается с левого края блока")
 	}
@@ -234,11 +363,11 @@ func TestCaptionDragExcludesButtons(t *testing.T) {
 // TestMainHitsMatchLayout — области нажатия совпадают с нарисованным.
 // Расхождение здесь — это «нажимаю на кнопку, ничего не происходит».
 func TestMainHitsMatchLayout(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	want := map[ItemID]Rect{
 		ItemClose: m.Caption.Close, ItemMinimize: m.Caption.Minimize,
 		ItemSettings: m.Gear, ItemAddProfile: m.Plus,
-		ItemConnect: m.Button, ItemLogToggle: m.LogRow,
+		ItemConnect: m.Button, ItemLog: m.LogRow,
 	}
 	got := map[ItemID]Rect{}
 	for _, h := range m.Hits() {
@@ -266,7 +395,7 @@ func TestMainHitsMatchLayout(t *testing.T) {
 // не наехали на логотип: между ними нажатие должно попадать в ту, что
 // нарисована.
 func TestHeaderButtonsSeparate(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	if overlap(m.Plus, m.Gear) {
 		t.Errorf("плюс и шестерёнка пересекаются: %+v / %+v", m.Plus, m.Gear)
 	}
@@ -282,9 +411,9 @@ func TestHeaderButtonsSeparate(t *testing.T) {
 }
 
 // TestSettingsLayoutGrows — список профилей удлиняет ленту, а окно остаётся
-// прежним: растёт прокрутка, а не окно.
+// прежним: растёт прокрутка, а не окно. Выше окно — больше окно просмотра.
 func TestSettingsLayoutGrows(t *testing.T) {
-	one, many := SettingsLayout(1), SettingsLayout(6)
+	one, many := SettingsLayout(1, DefaultWinH), SettingsLayout(6, DefaultWinH)
 	if many.ContentH <= one.ContentH {
 		t.Errorf("шесть профилей не удлинили ленту: %d → %d", one.ContentH, many.ContentH)
 	}
@@ -296,6 +425,9 @@ func TestSettingsLayoutGrows(t *testing.T) {
 	}
 	if many.MaxScroll() == 0 {
 		t.Error("с шестью профилями прокрутка не появилась")
+	}
+	if tall := SettingsLayout(6, 1100); tall.Viewport.H <= many.Viewport.H || tall.MaxScroll() >= many.MaxScroll() {
+		t.Error("высокое окно не увеличило окно просмотра настроек")
 	}
 	if len(many.Profiles) != 6 || len(many.ProfileMenus) != 6 {
 		t.Fatalf("профилей в раскладке %d/%d, ожидалось 6", len(many.Profiles), len(many.ProfileMenus))
@@ -311,6 +443,21 @@ func TestSettingsLayoutGrows(t *testing.T) {
 	}
 }
 
+// TestNoFullTunnelSwitch — переключателя «весь трафик через VPN» больше нет:
+// выключенный, он без списка сетей давал нерабочий профиль, а списка сетей в
+// окне нет. Раздельный туннель остался для тех, кто правит файл.
+func TestNoFullTunnelSwitch(t *testing.T) {
+	s := SettingsLayout(2, DefaultWinH)
+	if s.Allow.Bottom()+RowGap+12 != s.SectProfiles.Y {
+		t.Errorf("после «Исключений» лишняя строка: %+v → %+v", s.Allow, s.SectProfiles)
+	}
+	for _, h := range s.ScrollHits(0) {
+		if h.Rect.Y > s.Allow.Bottom()+s.Viewport.Y && h.Rect.Y < s.SectProfiles.Y+s.Viewport.Y {
+			t.Errorf("между защитой и профилями нажимается что-то ещё: %+v", h)
+		}
+	}
+}
+
 func contains(outer, inner Rect) bool {
 	return inner.X >= outer.X && inner.Right() <= outer.Right() &&
 		inner.Y >= outer.Y && inner.Bottom() <= outer.Bottom()
@@ -319,7 +466,7 @@ func contains(outer, inner Rect) bool {
 // TestSettingsScrollHitsClip — уехавшее за край окна просмотра не нажимается.
 // Иначе щелчок по заголовку экрана попадал бы в прокрученную под него строку.
 func TestSettingsScrollHitsClip(t *testing.T) {
-	s := SettingsLayout(8)
+	s := SettingsLayout(8, DefaultWinH)
 	top := s.ScrollHits(0)
 	if len(top) == 0 {
 		t.Fatal("без прокрутки не нашлось ни одной области")
@@ -353,7 +500,7 @@ func TestSettingsScrollHitsClip(t *testing.T) {
 // раньше самой строки: первое совпадение выигрывает, и иначе нажатие на
 // «…» выбирало бы профиль вместо открытия меню.
 func TestSettingsMenuBeforeRow(t *testing.T) {
-	s := SettingsLayout(3)
+	s := SettingsLayout(3, DefaultWinH)
 	hits := s.ScrollHits(0)
 	menuAt, rowAt := -1, -1
 	for i, h := range hits {
@@ -393,8 +540,8 @@ func TestProfileIndexRoundTrip(t *testing.T) {
 
 // TestToggleInsideRow — переключатель не вылезает из своей строки.
 func TestToggleInsideRow(t *testing.T) {
-	s := SettingsLayout(2)
-	for _, row := range []Rect{s.KillSwitch, s.FullTunnel, s.Autostart} {
+	s := SettingsLayout(2, DefaultWinH)
+	for _, row := range []Rect{s.KillSwitch, s.Autostart} {
 		tg := Toggle(row)
 		if !contains(row, tg) {
 			t.Errorf("переключатель вне строки: %+v / %+v", tg, row)
@@ -426,7 +573,7 @@ func TestCaptionReadsAsSeparateBar(t *testing.T) {
 		t.Fatalf("черта на %d проходит по кнопкам (низ кнопки %d)", c.Line.Y, c.Close.Bottom())
 	}
 	// И содержимое всех экранов начинается ниже полосы.
-	m := MainLayout(false, 1)
+	m := MainLayout(1, DefaultWinH)
 	if m.Logo.Y < c.Bar.Bottom() {
 		t.Fatalf("логотип на %d заходит в полосу заголовка (низ %d)", m.Logo.Y, c.Bar.Bottom())
 	}
@@ -448,5 +595,30 @@ func TestCaptionReadsAsSeparateBar(t *testing.T) {
 	}
 	if d := diff(ColorCaptionLn, ColorCaption); d < 5 {
 		t.Fatalf("черта светлее полосы на %d — её не будет видно", d)
+	}
+}
+
+func TestWindowPrefs(t *testing.T) {
+	path := t.TempDir() + "/sub/" + WindowPrefsFile
+	if p := LoadWindowPrefs(path); p.Height != DefaultWinH {
+		t.Fatalf("без файла высота %d", p.Height)
+	}
+	if err := SaveWindowPrefs(path, WindowPrefs{Height: 777}); err != nil {
+		t.Fatal(err)
+	}
+	if p := LoadWindowPrefs(path); p.Height != 777 {
+		t.Fatalf("высота не сохранилась: %d", p.Height)
+	}
+	if err := os.WriteFile(path, []byte("мусор"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p := LoadWindowPrefs(path); p.Height != DefaultWinH {
+		t.Fatalf("испорченный файл дал высоту %d", p.Height)
+	}
+	if err := os.WriteFile(path, []byte(`{"height":5}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p := LoadWindowPrefs(path); p.Height != MinWinH {
+		t.Fatalf("слишком низкое окно не поднято до MinWinH: %d", p.Height)
 	}
 }

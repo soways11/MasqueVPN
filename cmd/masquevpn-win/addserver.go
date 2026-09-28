@@ -85,7 +85,7 @@ func (a *app) placeEditors() {
 	if a.edit.fields[0] == 0 {
 		return
 	}
-	l := gui.AddLayout(a.editing)
+	l := gui.AddLayout(a.editing, a.winH)
 	for i, h := range a.edit.fields {
 		r := l.Edit(l.Fields[i].Box)
 		procSetWindowPos.Call(uintptr(h), 0,
@@ -141,7 +141,7 @@ func (a *app) openAddScreen() {
 		setText(h, "")
 	}
 	a.placeEditors()
-	a.resize()
+	a.invalidate()
 	a.showEditors(true)
 	procSetFocus.Call(uintptr(a.edit.fields[gui.FieldServer]))
 }
@@ -167,7 +167,7 @@ func (a *app) openEditScreen(i, focus int) {
 	setText(a.edit.fields[gui.FieldName], pr.Name)
 
 	a.placeEditors()
-	a.resize()
+	a.invalidate()
 	a.showEditors(true)
 	procSetFocus.Call(uintptr(a.edit.fields[focus]))
 	// Курсор в конец, иначе всё поле выглядит выделенным и первая же
@@ -254,7 +254,7 @@ func (a *app) confirmAdd() {
 	a.screen, a.scrollY = a.addFrom, 0
 	a.editing = false
 	a.clearNotice()
-	a.resize()
+	a.invalidate()
 
 	if wasEditing {
 		return
@@ -282,7 +282,7 @@ func (a *app) deleteEdited() {
 	a.showEditors(false)
 	a.screen, a.editing, a.scrollY = a.addFrom, false, 0
 	a.clearNotice()
-	a.resize()
+	a.invalidate()
 }
 
 // storeProfile записывает конфигурацию: при добавлении заводит новый

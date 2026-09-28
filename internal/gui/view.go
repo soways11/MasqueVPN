@@ -65,6 +65,8 @@ func (s State) DotColor() Color {
 type View struct {
 	Screen Screen
 	State  State
+	// Height — высота окна в логических точках; ноль — DefaultWinH.
+	Height int32
 
 	// Error — короткое человеческое объяснение, почему не подключились.
 	// Пусто, когда всё в порядке.
@@ -81,13 +83,15 @@ type View struct {
 	Bars     []float64 // история, 0…1
 	Since    time.Time // когда подняли туннель; нулевое время — не подняли
 
-	LogOpen  bool
 	LogLines []string
+	// LogScroll — на сколько строк журнал прокручен вверх от конца.
+	LogScroll int32
+	// LogCopied — журнал только что скопирован: кнопка говорит об этом.
+	LogCopied bool
 
 	// Настройки, какими их видно на втором экране.
 	KillSwitch bool
 	AllowCount int
-	FullTunnel bool
 	Autostart  bool
 	Profiles   []ProfileItem
 	ScrollY    int32
@@ -110,7 +114,11 @@ const (
 	ScreenMain Screen = iota
 	ScreenSettings
 	ScreenAdd
+	ScreenLog
 )
+
+// H — высота окна, для которой рисовать.
+func (v View) H() int32 { return ClampHeight(v.Height) }
 
 // ProfileItem — строка в списке профилей.
 type ProfileItem struct {

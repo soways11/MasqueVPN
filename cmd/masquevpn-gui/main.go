@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -50,19 +51,24 @@ type app struct {
 	scale float64
 
 	// Состояние интерфейса живёт в потоке цикла событий, без замка.
-	screen   gui.Screen
-	logOpen  bool
-	scrollY  int32
-	hot      gui.ItemID
-	pressed  gui.ItemID
-	editing  bool
-	editIdx  int
-	addFrom  gui.Screen
-	fields   [gui.MaxAddFields]string
-	focus    int
-	notice   string
-	failed   bool
-	badField int
+	screen  gui.Screen
+	scrollY int32
+	// winH — высота окна в логических точках; меняет её только человек,
+	// потянув нижний край (см. gui.DefaultWinH).
+	winH       int32
+	prefsDirty bool // высота поменялась и ещё не записана
+	logChars   int  // знаков в строке журнала, меряется при отрисовке
+	logCopied  time.Time
+	hot        gui.ItemID
+	pressed    gui.ItemID
+	editing    bool
+	editIdx    int
+	addFrom    gui.Screen
+	fields     [gui.MaxAddFields]string
+	focus      int
+	notice     string
+	failed     bool
+	badField   int
 
 	// menu — открытое меню; nil, когда меню закрыто. Рисуется слоем поверх
 	// окна, а не отдельным окном: в X11 всплывающее окно требует захвата
@@ -84,6 +90,9 @@ type app struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	lines    []string
+	// logScroll — на сколько строк журнал прокручен вверх от конца; под
+	// замком, потому что двигается вместе с новыми записями движка.
+	logScroll int32
 
 	// Клавиатура и буфер обмена.
 	keymap       []xproto.Keysym
@@ -114,9 +123,12 @@ func main() {
 		a.screen = gui.ScreenSettings
 	case "add":
 		a.screen = gui.ScreenAdd
+	case "log":
+		a.screen = gui.ScreenLog
 	}
 
 	a.loadProfiles()
+	a.winH = gui.LoadWindowPrefs(windowPrefsPath()).Height
 	a.appendLog("готов к подключению")
 	if os.Geteuid() != 0 {
 		// Не выходим: окно полезно и без прав — посмотреть профили. Но
@@ -132,6 +144,12 @@ func main() {
 	}
 	a.win = win
 	defer win.close()
+	// Запомненная высота могла остаться от большого монитора.
+	if screenH := int32(float64(win.screen.HeightInPixels)/a.scale) - 48; a.winH > screenH {
+		a.winH = gui.ClampHeight(screenH)
+		a.resize()
+	}
+	win.setSizeHints(w, int(float64(gui.MinWinH)*a.scale+0.5), int(float64(gui.MaxWinH)*a.scale+0.5))
 
 	a.run()
 }
@@ -147,21 +165,45 @@ func screenArg() string {
 	return ""
 }
 
-// windowSize — размер окна в пикселях для текущего экрана.
+// windowSize — размер окна в пикселях. Один на все экраны: окно больше не
+// подстраивается под экран, высоту меняет только человек.
 func (a *app) windowSize() (int, int) {
-	h := gui.MainLayout(a.logOpen, a.profileCount()).Height
-	switch a.screen {
-	case gui.ScreenSettings:
-		h = gui.SettingsH
-	case gui.ScreenAdd:
-		h = gui.AddLayout(a.editing).Height
-	}
-	return int(float64(gui.WinW)*a.scale + 0.5), int(float64(h)*a.scale + 0.5)
+	return int(float64(gui.WinW)*a.scale + 0.5), int(float64(gui.ClampHeight(a.winH))*a.scale + 0.5)
 }
 
 func (a *app) resize() {
 	w, h := a.windowSize()
 	a.win.resize(w, h)
+	a.invalidate()
+}
+
+// windowPrefsPath — где окно помнит свою высоту.
+func windowPrefsPath() string { return filepath.Join(config.DataDir(), gui.WindowPrefsFile) }
+
+func (a *app) savePrefs() {
+	if !a.prefsDirty {
+		return
+	}
+	a.prefsDirty = false
+	if err := gui.SaveWindowPrefs(windowPrefsPath(), gui.WindowPrefs{Height: a.winH}); err != nil {
+		a.appendLog("не удалось сохранить высоту окна: " + err.Error())
+	}
+}
+
+// onConfigure — окно поменяло размер: человек потянул нижний край (или
+// менеджер окон решил по-своему).
+func (a *app) onConfigure(e xproto.ConfigureNotifyEvent) {
+	if e.Height == 0 || a.scale <= 0 {
+		return
+	}
+	h := gui.ClampHeight(int32(float64(e.Height)/a.scale + 0.5))
+	if h != a.winH {
+		a.winH, a.prefsDirty = h, true
+		// Форма окна задана в пикселях: без этого низ растянутого окна
+		// остался бы обрезанным по старой высоте.
+		a.win.round(int(e.Width), int(e.Height))
+		a.clampScroll()
+	}
 	a.invalidate()
 }
 
@@ -204,6 +246,9 @@ func (a *app) run() {
 			a.handle(ev)
 		case <-ticker.C:
 			a.tick()
+			// Высота пишется раз в секунду, а не на каждое событие растяжения:
+			// конца растяжения X11 не сообщает.
+			a.savePrefs()
 		case <-a.redraw:
 			a.paint()
 		}
@@ -234,7 +279,7 @@ func (a *app) handle(ev xgb.Event) {
 	case xproto.SelectionRequestEvent:
 		a.onSelectionRequest(e)
 	case xproto.ConfigureNotifyEvent:
-		a.invalidate()
+		a.onConfigure(e)
 	case xproto.ClientMessageEvent:
 		// Единственное, что нам присылают сообщением, — просьба закрыться.
 		if e.Data.Data32[0] == uint32(a.win.atoms.wmDeleteWindow) {
@@ -250,6 +295,7 @@ func (a *app) handle(ev xgb.Event) {
 // вышедший раньше, оставил бы всё это висеть.
 func (a *app) shutdown() {
 	a.stopAndWait()
+	a.savePrefs()
 	a.quit = true
 }
 
@@ -261,6 +307,7 @@ func (a *app) paint() {
 
 	cv := guiraster.New(gui.WinW, logical, a.scale, a.fonts)
 	gui.Paint(cv, a.view(), a.hot, a.pressed, time.Now())
+	a.logChars = gui.LogChars(cv)
 	// Курсор мигает раз в секунду: считаем от часов, чтобы не заводить
 	// отдельный таймер ради одной полоски.
 	a.paintFields(cv, time.Now().UnixMilli()%1000 < 600)
@@ -280,8 +327,10 @@ func (a *app) view() gui.View {
 		Error:       a.lastErr,
 		TunAddr:     a.tunAddr,
 		Since:       a.since,
-		LogOpen:     a.logOpen,
+		Height:      a.winH,
 		LogLines:    append([]string(nil), a.lines...),
+		LogScroll:   a.logScroll,
+		LogCopied:   time.Now().Before(a.logCopied),
 		ScrollY:     a.scrollY,
 		AddNotice:   a.notice,
 		AddFailed:   a.failed,
@@ -301,7 +350,6 @@ func (a *app) view() gui.View {
 	if pr, ok := a.active(); ok {
 		v.Profile, v.Server = pr.Name, pr.Config.Server
 		v.KillSwitch = pr.Config.KillSwitch != nil && *pr.Config.KillSwitch
-		v.FullTunnel = pr.Config.FullTunnel != nil && *pr.Config.FullTunnel
 		v.AllowCount = len(pr.Config.KillSwitchAllow)
 	}
 	for _, pr := range a.profiles.List {
@@ -328,12 +376,14 @@ func (a *app) point(x, y int32) (int32, int32) {
 func (a *app) hits() []gui.Hit {
 	switch a.screen {
 	case gui.ScreenAdd:
-		return gui.AddLayout(a.editing).Hits()
+		return gui.AddLayout(a.editing, a.winH).Hits()
 	case gui.ScreenSettings:
-		s := gui.SettingsLayout(a.profileCount())
+		s := gui.SettingsLayout(a.profileCount(), a.winH)
 		return append(s.Hits(), s.ScrollHits(a.scrollY)...)
+	case gui.ScreenLog:
+		return gui.LogLayout(a.winH).Hits()
 	default:
-		return gui.MainLayout(a.logOpen, a.profileCount()).Hits()
+		return gui.MainLayout(a.profileCount(), a.winH).Hits()
 	}
 }
 
@@ -356,22 +406,83 @@ func (a *app) onMotion(px, py int32) {
 		}
 		return
 	}
+	_, y := a.point(px, py)
+	a.win.setResizeCursor(gui.OnResizeEdge(y, a.winH))
 	if h := a.hitTest(px, py); h != a.hot {
 		a.hot = h
 		a.invalidate()
 	}
 }
 
+// onWheel — колесо мыши (в X11 это кнопки 4 и 5): прокрутка журнала и
+// настроек.
+func (a *app) onWheel(up bool) {
+	switch a.screen {
+	case gui.ScreenLog:
+		a.mu.Lock()
+		if up {
+			a.logScroll += 3 // к старым записям
+		} else {
+			a.logScroll -= 3
+		}
+		a.mu.Unlock()
+	case gui.ScreenSettings:
+		if up {
+			a.scrollY -= 30
+		} else {
+			a.scrollY += 30
+		}
+		a.hot = gui.ItemNone
+	default:
+		return
+	}
+	a.clampScroll()
+	a.invalidate()
+}
+
+// clampScroll держит прокрутку настроек и журнала в допустимых пределах.
+func (a *app) clampScroll() {
+	s := gui.SettingsLayout(a.profileCount(), a.winH)
+	a.scrollY = min(max(a.scrollY, 0), s.MaxScroll())
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, _, _, a.logScroll = gui.LogWindow(a.lines, gui.LogLayout(a.winH).Rows(), a.logChars, a.logScroll)
+}
+
+// copyLog кладёт журнал в буфер обмена целиком.
+func (a *app) copyLog() {
+	a.mu.Lock()
+	text := strings.Join(a.lines, "\n")
+	a.mu.Unlock()
+	if text == "" {
+		return
+	}
+	a.offerClipboard(text)
+	a.logCopied = time.Now().Add(2 * time.Second)
+}
+
 func (a *app) onPress(px, py int32, rootX, rootY int16, button xproto.Button) {
 	if a.menu != nil {
 		return // выбор происходит по отпусканию
 	}
-	if button != 1 {
+	switch button {
+	case 4, 5:
+		a.onWheel(button == 4)
+		return
+	case 1:
+	default:
 		return
 	}
 	id := a.hitTest(px, py)
 	if id == gui.ItemNone {
 		x, y := a.point(px, py)
+		if gui.OnResizeEdge(y, a.winH) {
+			// Нижняя кромка — растяжение. Рамки у окна нет (её рисовал бы
+			// менеджер окон), поэтому просим его растянуть окно так же, как
+			// просим подвинуть за полосу заголовка.
+			a.win.startResize(rootX, rootY)
+			return
+		}
 		if y < gui.CaptionH {
 			// Пустое место в полосе заголовка — перетаскивание окна.
 			a.win.startDrag(rootX, rootY)
@@ -416,7 +527,7 @@ func (a *app) onRelease(px, py int32) {
 
 // fieldAt ищет поле ввода под точкой.
 func fieldAt(editing bool, x, y int32) int {
-	l := gui.AddLayout(editing)
+	l := gui.AddLayout(editing, gui.DefaultWinH) // поля от высоты окна не зависят
 	for i, f := range l.Fields {
 		if f.Box.Contains(x, y) {
 			return i
@@ -435,23 +546,28 @@ func (a *app) activate(id gui.ItemID) {
 		a.win.iconify()
 	case gui.ItemSettings:
 		a.screen, a.scrollY = gui.ScreenSettings, 0
-		a.resize()
+		a.invalidate()
 	case gui.ItemBack:
 		if a.screen == gui.ScreenAdd {
 			a.screen, a.editing = a.addFrom, false
 		} else {
 			a.screen = gui.ScreenMain
 		}
-		a.resize()
+		a.invalidate()
 	case gui.ItemConnect:
 		a.onConnectClicked()
-	case gui.ItemLogToggle:
-		a.logOpen = !a.logOpen
-		a.resize()
+	case gui.ItemLog:
+		// Журнал открывается с конца: смотрят его ради последних записей.
+		a.mu.Lock()
+		a.logScroll = 0
+		a.mu.Unlock()
+		a.screen = gui.ScreenLog
+		a.invalidate()
+	case gui.ItemLogCopy:
+		a.copyLog()
+		a.invalidate()
 	case gui.ItemKillSwitch:
 		a.toggleSetting("kill_switch")
-	case gui.ItemFullTunnel:
-		a.toggleSetting("full_tunnel")
 	case gui.ItemAutostart:
 		a.appendLog("автозапуск в Linux пока не настраивается из окна")
 	case gui.ItemAllowEdit:
@@ -607,9 +723,14 @@ const maxLogLines = 400
 
 func (a *app) appendLog(line string) {
 	a.mu.Lock()
-	a.lines = append(a.lines, time.Now().Format("15:04:05")+"  "+line)
+	entry := time.Now().Format("15:04:05") + "  " + line
+	a.lines = append(a.lines, entry)
 	if len(a.lines) > maxLogLines {
 		a.lines = a.lines[len(a.lines)-maxLogLines:]
+	}
+	if a.logScroll > 0 {
+		// Человек читает середину журнала — новая запись не сдвигает её.
+		a.logScroll += int32(len(gui.WrapLog([]string{entry}, max(a.logChars, 20))))
 	}
 	a.mu.Unlock()
 	a.invalidate()

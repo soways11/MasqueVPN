@@ -42,6 +42,9 @@
 
     <string name="log">Журнал</string>
     <string name="log_empty">пусто</string>
+    <string name="log_none">Записей пока нет</string>
+    <string name="log_copy">Копировать</string>
+    <string name="log_copied">Журнал скопирован</string>
     <plurals name="log_records">
         <item quantity="one">%d запись</item>
         <item quantity="few">%d записи</item>

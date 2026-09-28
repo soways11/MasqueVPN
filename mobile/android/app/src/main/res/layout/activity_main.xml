@@ -336,7 +336,7 @@
                 android:textAppearance="@style/TextAppearance.Masque.Small" />
         </LinearLayout>
 
-        <!-- Журнал: строка-заголовок, по нажатию раскрывается хвост. -->
+        <!-- Журнал: строка ведёт на отдельный экран (LogActivity). -->
         <LinearLayout
             android:id="@+id/log_row"
             style="@style/Masque.Row"
@@ -364,23 +364,11 @@
             </LinearLayout>
 
             <ImageView
-                android:id="@+id/log_chevron"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:importantForAccessibility="no"
-                android:src="@drawable/ic_chevron_down" />
+                android:src="@drawable/ic_arrow_right" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/log"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/row_gap"
-            android:background="@drawable/bg_log"
-            android:padding="12dp"
-            android:textAppearance="@style/TextAppearance.Masque.Mono"
-            android:textIsSelectable="true"
-            android:visibility="gone" />
 
         <!-- Распорка: подпись прижата к низу, если экран длиннее содержимого. -->
         <View

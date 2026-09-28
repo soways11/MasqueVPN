@@ -36,12 +36,12 @@ func TestAppNameConsistent(t *testing.T) {
 // TestWordmarkFits — имя длиннее прежнего, и оно рисуется с разрядкой:
 // проверяем, что логотип не упирается в шестерёнку.
 func TestWordmarkFits(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	// Логотипу отведено место до первой кнопки в шапке, а не вся его
 	// ширина: кнопок там теперь две.
 	avail := m.Plus.X - m.Logo.X - 12
 	fits(t, "логотип", AppWordmark, FaceLogo, avail)
 	fits(t, "подпись окна", AppName+" · MASQUE CONNECT-IP", FaceFooter, m.Footer.W)
 	fits(t, "кнопка добавления", "+  Добавить по ссылке "+LinkScheme+"://", FaceRow,
-		SettingsLayout(1).AddProfile.W-2*15)
+		SettingsLayout(1, DefaultWinH).AddProfile.W-2*15)
 }

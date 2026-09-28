@@ -35,7 +35,6 @@ func sampleView() gui.View {
 		Since:      t0.Add(-4*time.Minute - 12*time.Second),
 		LogLines:   []string{"22:01:55  подключение к nl.example.net:8443", "22:02:01  туннель поднят"},
 		KillSwitch: true,
-		FullTunnel: true,
 		AllowCount: 3,
 		Profiles: []gui.ProfileItem{
 			{Name: "Основной", Server: "nl.example.net:8443", Selected: true},
@@ -67,28 +66,50 @@ func TestRenderPNG(t *testing.T) {
 		view func() gui.View
 		h    int32
 	}{
-		{"main-on", sampleView, gui.MainLayout(false, 2).Height},
+		{"main-on", sampleView, gui.DefaultWinH},
 		{"main-off", func() gui.View {
 			v := sampleView()
 			v.State, v.TunAddr, v.Since = gui.Off, "", time.Time{}
 			v.BytesIn, v.BytesOut, v.RateIn, v.RateOut = 0, 0, 0, 0
 			return v
-		}, gui.MainLayout(false, 2).Height},
+		}, gui.DefaultWinH},
 		{"settings", func() gui.View {
 			v := sampleView()
 			v.Screen = gui.ScreenSettings
 			return v
-		}, gui.SettingsH},
+		}, gui.DefaultWinH},
 		{"add", func() gui.View {
 			v := sampleView()
 			v.Screen = gui.ScreenAdd
 			return v
-		}, gui.AddLayout(false).Height},
+		}, gui.DefaultWinH},
+		{"edit-min", func() gui.View {
+			v := sampleView()
+			v.Screen, v.Editing = gui.ScreenAdd, true
+			return v
+		}, gui.MinWinH},
+		{"log", func() gui.View {
+			v := sampleView()
+			v.Screen = gui.ScreenLog
+			for i := 0; i < 60; i++ {
+				v.LogLines = append(v.LogLines, "22:03:1"+string(rune('0'+i%10))+"  переподключение  attempt="+string(rune('0'+i%10))+"  err=порт 443 не отвечает: закрыт по пути или сервер выключен")
+			}
+			return v
+		}, gui.DefaultWinH},
+		{"main-many", func() gui.View {
+			v := sampleView()
+			for i := 0; i < 5; i++ {
+				v.Profiles = append(v.Profiles, gui.ProfileItem{Name: "Запасной", Server: "x.example.net:2053"})
+			}
+			return v
+		}, gui.DefaultWinH},
 	}
 
 	for _, c := range cases {
 		cv := New(gui.WinW, c.h, 2, fonts)
-		gui.Paint(cv, c.view(), gui.ItemNone, gui.ItemNone, time.Unix(1700000000, 0))
+		v := c.view()
+		v.Height = c.h
+		gui.Paint(cv, v, gui.ItemNone, gui.ItemNone, time.Unix(1700000000, 0))
 
 		img := cv.Image()
 		if img.Bounds().Dx() == 0 || img.Bounds().Dy() == 0 {

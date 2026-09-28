@@ -226,3 +226,27 @@ func TestProfilesUpdateKeepsSettings(t *testing.T) {
 		t.Fatalf("исключения или маршруты потеряны: %v %v", c.KillSwitchAllow, c.Routes)
 	}
 }
+
+// TestProfilesDropBrokenSplitTunnel — профиль, где переключатель «весь
+// трафик через VPN» выключили, а сетей не задали, не подключался вовсе.
+// Переключателя больше нет, и такой профиль возвращается в полный туннель;
+// настоящий раздельный туннель со списком сетей остаётся как был.
+func TestProfilesDropBrokenSplitTunnel(t *testing.T) {
+	raw := []byte(`{"profiles":[
+		{"name":"сломанный","config":{"server":"a.b:443","auth_key":"` + sampleKey + `","full_tunnel":false}},
+		{"name":"раздельный","config":{"server":"a.b:443","auth_key":"` + sampleKey + `","full_tunnel":false,"routes":["10.0.0.0/8"]}}]}`)
+	p, err := ParseProfiles(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken, split := p.List[0].Config, p.List[1].Config
+	if !*broken.FullTunnel || broken.Validate() != nil {
+		t.Fatalf("сломанный профиль не починен: full_tunnel=%v err=%v", *broken.FullTunnel, broken.Validate())
+	}
+	if !*broken.KillSwitch {
+		t.Error("у починенного профиля не включилось аварийное отключение")
+	}
+	if *split.FullTunnel || len(split.Routes) != 1 {
+		t.Errorf("раздельный туннель со списком сетей изменён: %v %v", *split.FullTunnel, split.Routes)
+	}
+}

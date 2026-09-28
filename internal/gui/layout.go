@@ -32,14 +32,25 @@ func (r Rect) Inset(d int32) Rect {
 }
 
 // Размеры окна и основные отступы.
+//
+// Высота окна одна на все экраны и сама не меняется: раньше окно
+// подстраивалось под экран (настройки выше подключения, раскрытый журнал
+// удлинял его, каждый профиль добавлял строку), и прыгающее под рукой окно
+// раздражало сильнее, чем пустое место. Теперь высоту меняет только сам
+// человек — потянув нижний край; раскладки получают её параметром и
+// раскладывают содержимое в неё, а длинное (профили, журнал, настройки)
+// прокручивают или обрезают.
 const (
-	WinW = 440 // ширина окна; не меняется — клиент не растягивают
-	WinH = 556 // ориентир: высота экрана подключения с одним профилем
+	WinW = 440 // ширина окна; не меняется — клиент не растягивают вширь
 
-	// SettingsH — высота экрана настроек. Она своя: настройки длиннее
-	// подключения, и подгонять их под чужую высоту значило бы прокручивать
-	// даже там, где прокручивать нечего.
-	SettingsH = 640
+	// DefaultWinH — высота окна, пока человек её не менял.
+	DefaultWinH = 640
+	// MinWinH — ниже окно не сжимается: на этой высоте ещё целиком
+	// помещается самый длинный из неподвижных экранов — правка профиля.
+	MinWinH = 600
+	// MaxWinH — выше тянуть незачем: столько не займёт ни один экран, а
+	// окно во весь монитор из клиента VPN делает что-то другое.
+	MaxWinH = 1400
 
 	CaptionH = 34 // своя полоса заголовка: системная светлая и спорит с темой
 	PadX     = 24 // поля слева и справа
@@ -55,8 +66,34 @@ const (
 	WinRadius = 16
 	RowH      = 52 // высота строки списка
 	RowGap    = 8
-	LogBoxH   = 200
+
+	// footerZone — место под подписью внизу каждого экрана.
+	footerZone = 24 + 14 + 16
 )
+
+// ClampHeight приводит высоту окна к допустимой: ноль и мусор из файла
+// настроек — к умолчанию, остальное — в пределы MinWinH…MaxWinH.
+func ClampHeight(h int32) int32 {
+	switch {
+	case h <= 0:
+		return DefaultWinH
+	case h < MinWinH:
+		return MinWinH
+	case h > MaxWinH:
+		return MaxWinH
+	}
+	return h
+}
+
+// FooterRect — подпись внизу окна высоты h.
+func FooterRect(h int32) Rect { return Rect{PadX, h - 30, ContentW, 14} }
+
+// ResizeEdge — полоса у нижнего края, за которую тянут окно.
+const ResizeEdge = 6
+
+// OnResizeEdge сообщает, стоит ли точка (в логических точках) на нижней
+// кромке окна высоты h — там, где окно растягивают.
+func OnResizeEdge(y, h int32) bool { return y >= h-ResizeEdge && y < h }
 
 // ContentW — ширина содержимого между полями.
 const ContentW = WinW - 2*PadX
@@ -74,12 +111,12 @@ const (
 	ItemClose
 	ItemMinimize
 	ItemSettings // шестерёнка
-	ItemBack     // назад из настроек
+	ItemBack     // назад из настроек, журнала и добавления
 	ItemConnect  // главная кнопка
-	ItemLogToggle
+	ItemLog      // строка «Журнал» на главном экране: открыть журнал
+	ItemLogCopy  // «Копировать» на экране журнала
 	ItemKillSwitch
 	ItemAllowEdit // исключения аварийного отключения
-	ItemFullTunnel
 	ItemAutostart
 	ItemAddProfile
 	ItemShowQR
@@ -153,7 +190,7 @@ func captionLayout() Caption {
 // в журнале, а сервер виден в списке профилей — там, где его и выбирают.
 type Main struct {
 	Caption Caption
-	Height  int32 // высота окна: зависит от числа профилей и журнала
+	Height  int32 // высота окна, для которой посчитана раскладка
 
 	Mark Rect // черепаха — знак программы
 	Logo Rect // слово MASQUEVPN
@@ -177,21 +214,22 @@ type Main struct {
 	ProfileMenus []Rect // кнопка «…» в строке профиля
 	MoreProfiles Rect   // «ещё N — в настройках»; пусто, когда влезли все
 
-	LogRow Rect
-	LogBox Rect // пуст, когда журнал свёрнут
+	LogRow Rect // строка «Журнал»: открывает экран журнала
 
 	Footer Rect
 }
 
-// MaxMainProfiles — сколько профилей показывать на главном экране.
+// MainLayout считает раскладку экрана подключения для n профилей в окне
+// высоты h.
 //
-// Список растит окно, и без потолка десяток профилей превратил бы его в
-// простыню. Остальные остаются в настройках, где список и так прокручивается.
-const MaxMainProfiles = 4
-
-// MainLayout считает раскладку экрана подключения для n профилей.
-func MainLayout(logOpen bool, n int) Main {
+// Строка журнала прижата к низу, профили занимают место между цифрами и ею
+// — сколько влезет. Не влезшие остаются в настройках, где список
+// прокручивается, а здесь о них напоминает строка «ещё N — в настройках».
+// Окно ради них больше не растёт.
+func MainLayout(n int, h int32) Main {
 	var m Main
+	h = ClampHeight(h)
+	m.Height = h
 	m.Caption = captionLayout()
 
 	const headY, headH = 48, 40
@@ -231,9 +269,13 @@ func MainLayout(logOpen bool, n int) Main {
 	m.SectProfiles = Rect{PadX, y, ContentW, 14}
 	y += 14 + 10
 
-	shown := n
-	if shown > MaxMainProfiles {
-		shown = MaxMainProfiles
+	m.LogRow = Rect{PadX, h - footerZone - 52, ContentW, 52}
+	room := m.LogRow.Y - 8 - y // место под строки профилей
+	fit := int(room / (RowH + RowGap))
+	shown := min(n, fit)
+	if shown < n {
+		// Не влезли все — нужна строка «ещё N», и под неё уходит место.
+		shown = max(int((room-20-RowGap)/(RowH+RowGap)), 0)
 	}
 	m.Profiles = make([]Rect, shown)
 	m.ProfileMenus = make([]Rect, shown)
@@ -246,16 +288,8 @@ func MainLayout(logOpen bool, n int) Main {
 	}
 	if n > shown {
 		m.MoreProfiles = Rect{PadX, y, ContentW, 20}
-		y += 20 + RowGap
 	}
-
-	m.LogRow = Rect{PadX, y + 2, ContentW, 52}
-	m.Height = m.LogRow.Bottom() + 24 + 14 + 16
-	if logOpen {
-		m.LogBox = Rect{PadX, m.LogRow.Bottom() + 8, ContentW, LogBoxH}
-		m.Height = m.LogBox.Bottom() + 24 + 14 + 16
-	}
-	m.Footer = Rect{PadX, m.Height - 30, ContentW, 14}
+	m.Footer = FooterRect(h)
 	return m
 }
 
@@ -283,7 +317,75 @@ func (m Main) Hits() []Hit {
 	if !m.MoreProfiles.Empty() {
 		hits = append(hits, Hit{ItemSettings, m.MoreProfiles})
 	}
-	return append(hits, Hit{ItemLogToggle, m.LogRow})
+	return append(hits, Hit{ItemLog, m.LogRow})
+}
+
+// Log — раскладка экрана журнала.
+//
+// Журнал — отдельный экран, а не раскрывающийся под профилями блок: в блок
+// помещалось десять строк, а окно при раскрытии вырастало вдвое. Здесь он
+// занимает всё окно, прокручивается колесом и копируется одной кнопкой —
+// именно это с ним и делают, когда что-то не работает.
+type Log struct {
+	Caption Caption
+	Back    Rect
+	Title   Rect
+	Copy    Rect
+	Box     Rect // рамка со строками
+	Footer  Rect
+}
+
+// LogLineH — высота строки журнала.
+const LogLineH = 17
+
+// LogLayout считает раскладку журнала в окне высоты h.
+func LogLayout(h int32) Log {
+	var l Log
+	h = ClampHeight(h)
+	l.Caption = captionLayout()
+	const headY, headH = 48, 40
+	l.Back = Rect{PadX, headY + (headH-30)/2, 30, 30}
+	l.Title = Rect{l.Back.Right() + 12, headY, 160, headH}
+	l.Copy = Rect{PadX + ContentW - 120, headY + (headH-32)/2, 120, 32}
+	l.Box = Rect{PadX, 100, ContentW, h - footerZone - 100 + 8}
+	l.Footer = FooterRect(h)
+	return l
+}
+
+// Hits перечисляет области экрана журнала.
+func (l Log) Hits() []Hit {
+	return []Hit{
+		{ItemClose, l.Caption.Close},
+		{ItemMinimize, l.Caption.Minimize},
+		{ItemBack, l.Back},
+		{ItemLogCopy, l.Copy},
+	}
+}
+
+// Rows — сколько строк журнала помещается в рамку.
+func (l Log) Rows() int { return max(int((l.Box.H-24)/LogLineH), 0) }
+
+// LogWindow выбирает, какие строки журнала показать: хвост, сдвинутый на
+// scroll строк вверх. Возвращает показанные строки, номер первой из них и
+// всего строк после переноса; scroll приводится к допустимому.
+//
+// Прокрутка считается от конца, а не от начала: журнал читают снизу, и
+// новая запись, пришедшая, пока человек смотрит в самый низ, должна
+// появиться сразу, а не ждать, пока он докрутит.
+//
+// chars — сколько знаков помещается в строку (см. LogChars); ноль —
+// расчётное значение для экрана без измерений.
+func LogWindow(lines []string, rows, chars int, scroll int32) (shown []string, first, total int, clamped int32) {
+	if chars <= 0 {
+		chars = maxLogLineChars
+	}
+	wrapped := WrapLog(lines, chars)
+	total = len(wrapped)
+	maxScroll := int32(max(total-rows, 0))
+	clamped = min(max(scroll, 0), maxScroll)
+	end := total - int(clamped)
+	first = max(end-rows, 0)
+	return wrapped[first:end], first, total, clamped
 }
 
 // Settings — раскладка экрана настроек.
@@ -303,7 +405,6 @@ type Settings struct {
 
 	KillSwitch Rect
 	Allow      Rect
-	FullTunnel Rect
 
 	SectProfiles Rect
 	Profiles     []Rect
@@ -316,16 +417,17 @@ type Settings struct {
 	Footer Rect
 }
 
-// SettingsLayout считает раскладку настроек для n профилей.
-func SettingsLayout(n int) Settings {
+// SettingsLayout считает раскладку настроек для n профилей в окне высоты h.
+func SettingsLayout(n int, h int32) Settings {
 	var s Settings
+	h = ClampHeight(h)
 	s.Caption = captionLayout()
 
 	const headY, headH = 48, 40
 	s.Back = Rect{PadX, headY + (headH-30)/2, 30, 30}
 	s.Title = Rect{s.Back.Right() + 12, headY, 240, headH}
 
-	s.Viewport = Rect{0, 96, WinW, SettingsH - 96 - 30}
+	s.Viewport = Rect{0, 96, WinW, h - 96 - 30}
 
 	y := int32(0)
 	sect := func(at *Rect) {
@@ -340,7 +442,6 @@ func SettingsLayout(n int) Settings {
 	sect(&s.SectGuard)
 	row(&s.KillSwitch)
 	row(&s.Allow)
-	row(&s.FullTunnel)
 	y += 12
 
 	sect(&s.SectProfiles)
@@ -360,7 +461,7 @@ func SettingsLayout(n int) Settings {
 	row(&s.Autostart)
 
 	s.ContentH = y
-	s.Footer = Rect{PadX, SettingsH - 30, ContentW, 14}
+	s.Footer = FooterRect(h)
 	return s
 }
 
@@ -397,7 +498,6 @@ func (s Settings) ScrollHits(offset int32) []Hit {
 	}
 	add(ItemKillSwitch, s.KillSwitch)
 	add(ItemAllowEdit, s.Allow)
-	add(ItemFullTunnel, s.FullTunnel)
 	add(ItemAddProfile, s.AddProfile)
 	add(ItemAutostart, s.Autostart)
 	return hits
@@ -446,7 +546,10 @@ type Add struct {
 	Notice  Rect
 	Footer  Rect
 
-	Height int32 // высота окна: зависит от числа полей
+	Height int32 // высота окна, для которой посчитана раскладка
+	// ContentBottom — где кончается содержимое; окно ниже этого плюс
+	// подпись сжимать нельзя (см. MinWinH).
+	ContentBottom int32
 }
 
 // AddField — одно поле формы: подпись над рамкой и сама рамка.
@@ -480,9 +583,15 @@ var AddFieldTitles = [MaxAddFields]string{
 // EditInset — отступ настоящего поля ввода внутри нарисованной рамки.
 const EditInset = 12
 
-// AddLayout считает раскладку экрана добавления или правки.
-func AddLayout(editing bool) Add {
+// AddLayout считает раскладку экрана добавления или правки в окне высоты h.
+//
+// Содержимое неподвижно и от высоты не зависит — под ним стоят настоящие
+// поля ввода, двигать которые при каждом изменении окна незачем; от высоты
+// зависит только подпись внизу. Раскладка плотная: правка профиля (четыре
+// поля и кнопка удаления) обязана поместиться в MinWinH.
+func AddLayout(editing bool, h int32) Add {
 	var a Add
+	h = ClampHeight(h)
 	a.Caption = captionLayout()
 	a.Editing = editing
 
@@ -492,27 +601,27 @@ func AddLayout(editing bool) Add {
 
 	a.Fields = make([]AddField, MaxAddFields)
 
-	y := int32(100)
+	y := int32(96)
 	for i := range a.Fields {
 		a.Fields[i].Label = Rect{PadX, y, ContentW, 14}
-		a.Fields[i].Box = Rect{PadX, y + 22, ContentW, 44}
-		y = a.Fields[i].Box.Bottom() + 16
+		a.Fields[i].Box = Rect{PadX, y + 20, ContentW, 42}
+		y = a.Fields[i].Box.Bottom() + 14
 	}
 
-	a.Paste = Rect{PadX, y + 4, 210, 40}
-	a.Confirm = Rect{PadX, a.Paste.Bottom() + 16, ContentW, 48}
+	a.Paste = Rect{PadX, y + 2, 210, 40}
 	// Удаление живёт на экране правки, а не только в меню: правка и
 	// удаление — действия над одним и тем же профилем, и искать второе в
 	// другом месте незачем. Кнопка обычная, а не опасно-красная: спросит
-	// подтверждение она сама.
-	y = a.Confirm.Bottom() + 12
+	// подтверждение она сама. Стоит в одном ряду со вставкой — так правка
+	// помещается в окно наименьшей высоты.
 	if editing {
-		a.Delete = Rect{PadX, y, ContentW, 38}
-		y = a.Delete.Bottom() + 12
+		a.Delete = Rect{a.Paste.Right() + 12, a.Paste.Y, ContentW - a.Paste.W - 12, 40}
 	}
-	a.Notice = Rect{PadX, y + 2, ContentW, 32}
-	a.Height = a.Notice.Bottom() + 18 + 14 + 16
-	a.Footer = Rect{PadX, a.Height - 30, ContentW, 14}
+	a.Confirm = Rect{PadX, a.Paste.Bottom() + 14, ContentW, 48}
+	a.Notice = Rect{PadX, a.Confirm.Bottom() + 12, ContentW, 32}
+	a.ContentBottom = a.Notice.Bottom()
+	a.Height = h
+	a.Footer = FooterRect(h)
 	return a
 }
 

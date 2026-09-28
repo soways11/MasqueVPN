@@ -38,7 +38,7 @@ func fits(t *testing.T, name, s string, f Font, w int32) {
 
 // TestMainTextFits — надписи главного экрана.
 func TestMainTextFits(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 
 	for _, s := range []string{"Нет подключения", "Соединение защищено", "Подключение", "Отключение", "Не подключилось"} {
 		fits(t, "статус", s, FaceLabel, m.StatusText.W)
@@ -60,7 +60,7 @@ func TestMainTextFits(t *testing.T) {
 	fits(t, "имя профиля", strings.Repeat("ш", maxProfileNameChars), FaceRow, rowText)
 	fits(t, "адрес профиля", strings.Repeat("ш", maxProfileServerChars), FaceSmall, rowText)
 	fits(t, "метка профилей", "Профили", FaceLabel, m.SectProfiles.W-32)
-	many := MainLayout(false, 9)
+	many := MainLayout(9, DefaultWinH)
 	fits(t, "ещё профили", "ещё 5 профилей — в настройках", FaceSmall, many.MoreProfiles.W)
 }
 
@@ -73,7 +73,7 @@ func TestErrorTextFits(t *testing.T) {
 // TestStatsTextFits — блок из трёх цифр самый тесный: ячейка вчетверо уже
 // окна, а подписи в ней полноразмерные.
 func TestStatsTextFits(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	for i, c := range []struct{ value, label string }{
 		{"1023 Б", "Принято"},
 		{"938 МБ", "Отправлено"},
@@ -89,7 +89,7 @@ func TestStatsTextFits(t *testing.T) {
 // Справа у каждой строки переключатель или ссылка, поэтому текст живёт не
 // во всей ширине — именно это соотношение тест и стережёт.
 func TestRowTextFits(t *testing.T) {
-	s := SettingsLayout(2)
+	s := SettingsLayout(2, DefaultWinH)
 	textW := s.KillSwitch.W - 2*15 - 60 // поля строки и место под переключатель
 
 	rows := []struct{ title, hint string }{
@@ -117,7 +117,7 @@ func TestRowTextFits(t *testing.T) {
 
 // TestButtonTextFits — надписи кнопки не должны доезжать до стрелки справа.
 func TestButtonTextFits(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	// Текст выровнен по центру, стрелка стоит у правого края: значит с
 	// каждой стороны от текста должно остаться место под неё.
 	const arrowZone = 26 * 2
@@ -129,18 +129,20 @@ func TestButtonTextFits(t *testing.T) {
 // TestLogLineFits — строка журнала обрезается раньше, чем упрётся в край
 // поля: иначе она молча уезжала бы под рамку.
 func TestLogLineFits(t *testing.T) {
-	m := MainLayout(true, 2)
-	fits(t, "журнал", strings.Repeat("ш", maxLogLineChars), FaceMono, m.LogBox.W-24)
+	l := LogLayout(DefaultWinH)
+	fits(t, "журнал", strings.Repeat("ш", maxLogLineChars), FaceMono, l.Box.W-24) // полоса прокрутки — в поле рамки, правее текста
+	fits(t, "копировать", "Скопировано", FaceRow, l.Copy.W-16)
+	fits(t, "заголовок журнала", "Журнал", FaceTitle, l.Title.W)
 
-	// А в свёрнутом виде — подпись под словом «Журнал».
-	fits(t, "подпись журнала", "12 записей, последняя 14:02", FaceSmall, m.LogRow.W-30-30)
+	// На главном экране — подпись под словом «Журнал».
+	fits(t, "подпись журнала", "400 записей, последняя 14:02", FaceSmall, MainLayout(2, DefaultWinH).LogRow.W-30-30)
 }
 
 // TestFooterFits — подпись внизу окна.
 func TestFooterFits(t *testing.T) {
-	m := MainLayout(false, 2)
+	m := MainLayout(2, DefaultWinH)
 	fits(t, "подпись окна", "masquevpn · MASQUE CONNECT-IP", FaceFooter, m.Footer.W)
-	fits(t, "заголовок настроек", "Настройки", FaceTitle, SettingsLayout(0).Title.W)
+	fits(t, "заголовок настроек", "Настройки", FaceTitle, SettingsLayout(0, DefaultWinH).Title.W)
 }
 
 // TestPluralRu — склонение при числе. Без него интерфейс сразу выдаёт
@@ -163,7 +165,7 @@ func TestPluralRu(t *testing.T) {
 // каждое лежит внутри своей рамки. Поля ввода — настоящие системные
 // элементы, и уехав за рамку, они выглядели бы белыми заплатами поверх окна.
 func TestAddLayoutFits(t *testing.T) {
-	a := AddLayout(false)
+	a := AddLayout(false, MinWinH)
 	named := map[string]Rect{
 		"назад": a.Back, "заголовок": a.Title, "вставить": a.Paste,
 		"добавить": a.Confirm, "сообщение": a.Notice, "подпись": a.Footer,
@@ -176,8 +178,8 @@ func TestAddLayoutFits(t *testing.T) {
 		if r.X < 0 || r.Right() > WinW {
 			t.Errorf("%s выходит за ширину окна: %+v", name, r)
 		}
-		if r.Y < CaptionH || r.Bottom() > AddLayout(false).Height {
-			t.Errorf("%s выходит за высоту окна: %+v (окно %d)", name, r, AddLayout(false).Height)
+		if r.Y < CaptionH || r.Bottom() > MinWinH {
+			t.Errorf("%s выходит за высоту окна: %+v (окно %d)", name, r, MinWinH)
 		}
 	}
 	for i, f := range a.Fields {
@@ -207,7 +209,7 @@ func TestAddLayoutFits(t *testing.T) {
 
 // TestAddTextFits — надписи экрана добавления.
 func TestAddTextFits(t *testing.T) {
-	a := AddLayout(false)
+	a := AddLayout(false, MinWinH)
 	fits(t, "заголовок", "Добавить сервер", FaceTitle, a.Title.W)
 	for i, f := range a.Fields {
 		fits(t, "метка поля", AddFieldTitles[i], FaceLabel, f.Label.W-32)
@@ -262,7 +264,7 @@ func TestWrapTwo(t *testing.T) {
 // нарисованы, и рамки полей ввода не перехватывают нажатия: внутри них
 // стоит системный элемент со своим поведением.
 func TestAddHitsMatchLayout(t *testing.T) {
-	a := AddLayout(false)
+	a := AddLayout(false, MinWinH)
 	got := map[ItemID]Rect{}
 	for _, h := range a.Hits() {
 		got[h.ID] = h.Rect
@@ -288,7 +290,7 @@ func TestAddHitsMatchLayout(t *testing.T) {
 // индексы у них совпадают: окно кладёт текст по FieldServer и не должно
 // гадать, какой это номер на этом экране.
 func TestAddAndEditFields(t *testing.T) {
-	add, edit := AddLayout(false), AddLayout(true)
+	add, edit := AddLayout(false, MinWinH), AddLayout(true, MinWinH)
 	for name, a := range map[string]Add{"добавление": add, "правка": edit} {
 		if len(a.Fields) != MaxAddFields {
 			t.Errorf("%s: полей %d, ожидалось %d", name, len(a.Fields), MaxAddFields)
@@ -302,9 +304,9 @@ func TestAddAndEditFields(t *testing.T) {
 	if !edit.Editing || add.Editing {
 		t.Error("режим не отражён в раскладке")
 	}
-	// Экран правки выше на кнопку удаления — больше ничем не отличается.
-	if edit.Height <= add.Height {
-		t.Errorf("окно правки не выросло под кнопку удаления: %d → %d", add.Height, edit.Height)
+	// Высота окна одна: правка не растит его под кнопку удаления.
+	if edit.Height != add.Height {
+		t.Errorf("окно правки и добавления разной высоты: %d и %d", add.Height, edit.Height)
 	}
 
 	// Всё помещается и не налезает.
@@ -313,11 +315,7 @@ func TestAddAndEditFields(t *testing.T) {
 		for _, f := range a.Fields {
 			order = append(order, f.Label, f.Box)
 		}
-		order = append(order, a.Paste, a.Confirm)
-		if !a.Delete.Empty() {
-			order = append(order, a.Delete)
-		}
-		order = append(order, a.Notice, a.Footer)
+		order = append(order, a.Paste, a.Confirm, a.Notice, a.Footer)
 		for i := 1; i < len(order); i++ {
 			if order[i].Y < order[i-1].Bottom() {
 				t.Errorf("%s: блок %d налезает на предыдущий: %+v после %+v",
@@ -340,20 +338,28 @@ func TestAddAndEditFields(t *testing.T) {
 // TestDeleteOnEditOnly — кнопка удаления есть только при правке: при
 // добавлении удалять нечего, и пустая кнопка там смотрелась бы ошибкой.
 func TestDeleteOnEditOnly(t *testing.T) {
-	if add := AddLayout(false); !add.Delete.Empty() {
+	if add := AddLayout(false, MinWinH); !add.Delete.Empty() {
 		t.Error("на экране добавления есть кнопка удаления")
 	}
-	edit := AddLayout(true)
+	edit := AddLayout(true, MinWinH)
 	if edit.Delete.Empty() {
 		t.Fatal("на экране правки нет кнопки удаления")
 	}
-	if edit.Delete.Y < edit.Confirm.Bottom() {
-		t.Error("удаление выше сохранения — его нажмут по ошибке")
+	// Удаление — в ряду второстепенных кнопок, рядом со вставкой, а не
+	// вплотную к «Сохранить»: главную кнопку жмут не глядя. Подтверждение
+	// удаление спрашивает само.
+	if edit.Delete.Y != edit.Paste.Y || overlap(edit.Delete, edit.Paste) {
+		t.Errorf("удаление не в ряду со вставкой: %+v / %+v", edit.Delete, edit.Paste)
 	}
-	if overlap(edit.Delete, edit.Notice) || overlap(edit.Delete, edit.Footer) {
-		t.Error("кнопка удаления налезает на текст под ней")
+	if edit.Delete.Right() > PadX+ContentW {
+		t.Error("кнопка удаления выходит за поля")
 	}
-	fits(t, "кнопка удаления", "Удалить профиль", FaceRow, edit.Delete.W-20)
+	for _, r := range []Rect{edit.Confirm, edit.Notice, edit.Footer} {
+		if overlap(edit.Delete, r) {
+			t.Errorf("кнопка удаления налезает на %+v", r)
+		}
+	}
+	fits(t, "кнопка удаления", "Удалить", FaceRow, edit.Delete.W-20)
 
 	// И она нажимается — ровно там, где нарисована.
 	var found bool
@@ -368,7 +374,7 @@ func TestDeleteOnEditOnly(t *testing.T) {
 	if !found {
 		t.Error("кнопка удаления не нажимается")
 	}
-	for _, h := range AddLayout(false).Hits() {
+	for _, h := range AddLayout(false, MinWinH).Hits() {
 		if h.ID == ItemDeleteProfile {
 			t.Error("на экране добавления удаление нажимается")
 		}
@@ -461,7 +467,7 @@ func TestWrapLog(t *testing.T) {
 		if n := len([]rune(s)); n > maxLogLineChars {
 			t.Errorf("строка %d длиннее предела: %d знаков", i, n)
 		}
-		fits(t, "строка журнала", s, FaceMono, MainLayout(true, 2).LogBox.W-24)
+		fits(t, "строка журнала", s, FaceMono, LogLayout(DefaultWinH).Box.W-24)
 	}
 	// Продолжение отличается отступом — иначе читается как новая запись.
 	if strings.HasPrefix(out[1], " ") == false {

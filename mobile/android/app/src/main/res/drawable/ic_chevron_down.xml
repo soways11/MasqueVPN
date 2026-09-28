@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Уголок журнала. Вверх — он же, повёрнутый в коде (rotation = 180). -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="18dp" android:height="18dp"
-    android:viewportWidth="24" android:viewportHeight="24">
-    <path android:strokeColor="@color/dim" android:strokeWidth="2"
-        android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M7,10 L12,15 L17,10" />
-</vector>

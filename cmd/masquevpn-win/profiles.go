@@ -194,10 +194,6 @@ func (a *app) toggleSetting(name string) {
 		value = !(pr.Config.KillSwitch != nil && *pr.Config.KillSwitch)
 		v := value
 		pr.Config.KillSwitch = &v
-	case "full_tunnel":
-		value = !(pr.Config.FullTunnel != nil && *pr.Config.FullTunnel)
-		v := value
-		pr.Config.FullTunnel = &v
 	default:
 		return
 	}
