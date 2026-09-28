@@ -62,7 +62,7 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 	}
 
 	log.Info("подключение", "server", cfg.Server, "sni", cfg.Host(), "transport", dialer.Transport())
-	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, dialer.ConnectTimeout())
 	defer cancel()
 	onRotate := func(old, new []netip.Prefix) {
 		o, n := usable(old, *cfg.IPv6, log), usable(new, *cfg.IPv6, log)

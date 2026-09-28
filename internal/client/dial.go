@@ -65,15 +65,18 @@ func deviceID(opt Options) string {
 
 // Dialer устанавливает CONNECT-IP сессии по конфигурации.
 type Dialer struct {
-	cfg      *config.Client
-	opt      Options
-	log      *slog.Logger
-	auth     *auth.Authenticator
-	roots    *x509.CertPool
-	spec     any
-	proto    string
-	host     string
-	port     string
+	cfg   *config.Client
+	opt   Options
+	log   *slog.Logger
+	auth  *auth.Authenticator
+	roots *x509.CertPool
+	spec  any
+	proto string
+	host  string
+	// ports — порты сервера в порядке перебора (см. config.SplitServer);
+	// cur — номер последнего ответившего: следующий дозвон начинается с него.
+	ports    []string
+	cur      atomic.Int32
 	resolver *net.Resolver
 	// fixed — резолверы по одному на сервер из Options.Resolvers, по порядку.
 	fixed []*net.Resolver
@@ -85,6 +88,9 @@ type Dialer struct {
 
 	// legacy — сервер не понимает токен с устройством (см. legacyRetry).
 	legacy atomic.Bool
+
+	// attempt — одна попытка на одном порту; подменяется в тестах.
+	attempt func(ctx context.Context, ip, port string, last bool) (*masque.Conn, error)
 
 	mu       sync.Mutex
 	lastAddr netip.Addr
@@ -145,12 +151,12 @@ func NewDialer(cfg *config.Client, opt Options) (*Dialer, error) {
 	if d.proto, err = config.Protocol(cfg.Protocol); err != nil {
 		return nil, err
 	}
-	if _, _, err := net.SplitHostPort(cfg.Server); err != nil {
+	host, ports, err := config.SplitServer(cfg.Server)
+	if err != nil {
 		return nil, err
 	}
-	var host string
-	host, d.port, _ = net.SplitHostPort(cfg.Server)
-	d.host = host
+	d.host, d.ports = host, ports
+	d.attempt = d.dialPort
 	// Резолвер по умолчанию системный, и это не мелочь. Системный знает
 	// порядок адаптеров, NRPT, файл hosts и настройки DNS-over-HTTPS;
 	// встроенный в Go берёт серверы со ВСЕХ адаптеров подряд — включая
@@ -202,8 +208,8 @@ func (d *Dialer) ServerIP() netip.Addr {
 	return d.lastAddr
 }
 
-// resolve возвращает адрес сервера. При ошибке разрешения используется
-// последний удачный адрес.
+// resolve возвращает IP-адрес сервера (без порта). При ошибке разрешения
+// используется последний удачный адрес.
 func (d *Dialer) resolve(ctx context.Context) (string, error) {
 	if ip, err := netip.ParseAddr(d.host); err == nil {
 		// Адрес записываем и в этом случае: по ServerIP платформы уводят
@@ -214,7 +220,7 @@ func (d *Dialer) resolve(ctx context.Context) (string, error) {
 		d.mu.Lock()
 		d.lastAddr = ip
 		d.mu.Unlock()
-		return net.JoinHostPort(ip.String(), d.port), nil
+		return ip.String(), nil
 	}
 	ips, err := d.lookup(ctx)
 	d.mu.Lock()
@@ -235,7 +241,7 @@ func (d *Dialer) resolve(ctx context.Context) (string, error) {
 	} else {
 		d.log.Warn("не удалось разрешить имя сервера, используется прежний адрес", "host", d.host, "addr", d.lastAddr, "err", err)
 	}
-	return net.JoinHostPort(d.lastAddr.String(), d.port), nil
+	return d.lastAddr.String(), nil
 }
 
 // perServerTimeout — сколько ждать один резолвер из явного списка, прежде
@@ -273,12 +279,12 @@ func (d *Dialer) lookup(ctx context.Context) ([]netip.Addr, error) {
 	return nil, lastErr
 }
 
-func (d *Dialer) authority() string {
+func (d *Dialer) authority(port string) string {
 	h := d.cfg.Host()
-	if d.port == "443" {
+	if port == "443" {
 		return h // как браузер: порт по умолчанию не пишется
 	}
-	return net.JoinHostPort(h, d.port)
+	return net.JoinHostPort(h, port)
 }
 
 func (d *Dialer) listenUDP() (*net.UDPConn, error) {
@@ -313,15 +319,64 @@ func (d *Dialer) coverBrowsing() *masque.CoverBrowsing {
 
 // Dial устанавливает одну сессию и дожидается адреса и маршрутов.
 // Каждый вызов — свежий токен и свежий профиль маскировки.
+//
+// Портов у сервера может быть несколько (host:8443,2053,…). Начинаем с
+// того, что ответил в прошлый раз, и идём по кругу, пока какой-нибудь не
+// ответит. На следующий порт переходим, только когда этот МОЛЧИТ (см.
+// unreachable): отказ сервера, чужой сертификат или неверный ключ на
+// другом порту не исправятся, и перебор лишь затянул бы ошибку.
 func (d *Dialer) Dial(ctx context.Context) (*masque.Conn, error) {
-	addr, err := d.resolve(ctx)
+	ip, err := d.resolve(ctx)
 	if err != nil {
 		return nil, err
 	}
-	hdr, err := d.tokenHeader()
-	if err != nil {
-		return nil, err
+	n := len(d.ports)
+	start := int(d.cur.Load()) % n
+	var silent []string
+	for i := 0; i < n; i++ {
+		idx := (start + i) % n
+		port := d.ports[idx]
+		last := i == n-1
+		c, err := d.attempt(ctx, ip, port, last)
+		if err == nil {
+			if prev := int(d.cur.Swap(int32(idx))); prev != idx || i > 0 {
+				d.log.Info("сервер отвечает на порту "+port, "port", port)
+			}
+			return c, nil
+		}
+		if ctx.Err() != nil || !unreachable(err) {
+			return nil, err
+		}
+		silent = append(silent, port)
+		if !last {
+			d.log.Warn("порт "+port+" не отвечает — пробую следующий", "port", port, "next", d.ports[(idx+1)%n], "err", err)
+		}
+		if i == n-1 {
+			return nil, &PortsError{Host: d.host, Ports: silent, Err: err}
+		}
 	}
+	return nil, errors.New("client: нет портов сервера") // недостижимо: SplitServer даёт хотя бы один
+}
+
+// perPortTimeout — сколько ждать рукопожатия на одном порту, когда впереди
+// есть другие. Сам QUIC сдаётся через 5 с тишины; предел чуть больше нужен
+// на случай, когда пакеты идут, а рукопожатие всё не завершается.
+const perPortTimeout = 8 * time.Second
+
+// ConnectTimeout — сколько отводить на первое подключение: столько, чтобы
+// успеть перебрать все порты. Вызывающие ставят этот срок на OpenSession.
+func (d *Dialer) ConnectTimeout() time.Duration {
+	return max(30*time.Second, time.Duration(len(d.ports))*perPortTimeout+10*time.Second)
+}
+
+// Ports — порты сервера в порядке перебора.
+func (d *Dialer) Ports() []string { return append([]string(nil), d.ports...) }
+
+// dialPort — попытка на одном порту: транспорт, затем адрес и маршруты.
+// Предел perPortTimeout ставится только на транспорт и только если после
+// этого порта есть другие: дальше сервер уже ответил, и ожидание адреса к
+// выбору порта отношения не имеет.
+func (d *Dialer) dialPort(ctx context.Context, ip, port string, last bool) (*masque.Conn, error) {
 	shaping, err := config.ShapingProfile(d.cfg.Shaping)
 	if err != nil {
 		return nil, err
@@ -330,9 +385,18 @@ func (d *Dialer) Dial(ctx context.Context) (*masque.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	addr := net.JoinHostPort(ip, port)
 	dialWith := func(hdr http.Header) (*masque.Conn, error) {
-		return d.dialTransport(ctx, addr, hdr, shaping, packing)
+		tctx, cancel := ctx, context.CancelFunc(func() {})
+		if !last {
+			tctx, cancel = context.WithTimeout(ctx, perPortTimeout)
+		}
+		defer cancel()
+		return d.dialTransport(tctx, addr, port, hdr, shaping, packing)
+	}
+	hdr, err := d.tokenHeader()
+	if err != nil {
+		return nil, err
 	}
 	c, err := dialWith(hdr)
 	if err != nil {
@@ -356,6 +420,41 @@ func (d *Dialer) Dial(ctx context.Context) (*masque.Conn, error) {
 	}
 	return d.finishDial(ctx, c)
 }
+
+// unreachable — ошибка значит «с этого порта никто не ответил»: истёк срок
+// или рукопожатие не состоялось за отведённое QUIC время (так выглядит и
+// выключенный сервер, и порт, который режут по пути), пришёл ICMP «порт
+// недоступен», либо пакет не выпустил файрвол на самой машине (EPERM,
+// EACCES при отправке — корпоративные правила, антивирус). Всё остальное —
+// ответ сервера, и другой порт его не изменит.
+func unreachable(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// PortsError — сервер не ответил ни на одном из портов.
+//
+// Раньше человек видел «timeout: no recent network activity» и не мог
+// отличить блокировку от опечатки в адресе или выключенного сервера. Текст
+// короткий: в окне под ошибку две строки по 50 знаков.
+type PortsError struct {
+	Host  string
+	Ports []string // в порядке попыток
+	Err   error    // последняя ошибка
+}
+
+func (e *PortsError) Error() string {
+	if len(e.Ports) == 1 {
+		return "порт " + e.Ports[0] + " не отвечает: закрыт по пути или сервер выключен"
+	}
+	return "порты " + strings.Join(e.Ports, ", ") + " не отвечают: закрыты по пути или сервер выключен"
+}
+
+func (e *PortsError) Unwrap() error { return e.Err }
 
 // tokenHeader — заголовок со свежим токеном. Версия зависит от того, понял ли
 // её сервер (см. legacyRetry).
@@ -393,7 +492,7 @@ func (d *Dialer) legacyRetry(err error) (http.Header, bool) {
 }
 
 // dialTransport поднимает сессию выбранным транспортом.
-func (d *Dialer) dialTransport(ctx context.Context, addr string, hdr http.Header,
+func (d *Dialer) dialTransport(ctx context.Context, addr, port string, hdr http.Header,
 	shaping *masque.Shaping, packing *masque.Packing) (*masque.Conn, error) {
 
 	var c *masque.Conn
@@ -404,7 +503,7 @@ func (d *Dialer) dialTransport(ctx context.Context, addr string, hdr http.Header
 			Addr:          addr,
 			ServerName:    d.cfg.Host(),
 			RootCAs:       d.roots,
-			Authority:     d.authority(),
+			Authority:     d.authority(port),
 			Path:          d.cfg.Path,
 			Header:        hdr,
 			Shaping:       shaping,
@@ -429,7 +528,7 @@ func (d *Dialer) dialTransport(ctx context.Context, addr string, hdr http.Header
 				ClientSessionCache: d.tickets,
 			}),
 			QUICConfig:    prof.QUICConfig(),
-			Authority:     d.authority(),
+			Authority:     d.authority(port),
 			Path:          d.cfg.Path,
 			Header:        hdr,
 			Shaping:       shaping,
@@ -479,7 +578,9 @@ const minIPv6MTU = 1280
 // onRotate вызывается при смене адресов (ротация, переподключение).
 func (d *Dialer) OpenSession(ctx context.Context, onRotate func(old, new []netip.Prefix)) (*session.Session, error) {
 	return session.Open(ctx, session.Config{
-		Dial:        d.Dial,
+		Dial: d.Dial,
+		// Переподключение и ротация — тот же перебор портов, срок нужен на все.
+		DialTimeout: max(15*time.Second, time.Duration(len(d.ports))*perPortTimeout+7*time.Second),
 		Every:       d.cfg.Rotation.Every.D(),
 		AfterBytes:  d.cfg.Rotation.AfterBytes,
 		Jitter:      d.cfg.Rotation.Jitter,

@@ -461,9 +461,35 @@ func run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if profile != nil && profile.CIDLength() > 0 {
 		cidLen = profile.CIDLength()
 	}
-	srvDone := make(chan error, 1)
-	go func() { srvDone <- masque.ListenAndServeUDP(srv, cfg.Listen, cidLen) }()
-	log.Info("сервер запущен", "listen", cfg.Listen, "tun", dev.Name(), "gateway", gwAddrs,
+	//
+	// Портов может быть несколько (listen и alt_ports): один сервер, один
+	// обработчик, по слушателю на порт. Сокеты открываются все сразу и до
+	// запуска: занятый запасной порт — ошибка запуска, а не тихо пропавший
+	// порт, на который клиенты будут стучаться впустую.
+	udpAddrs, err := cfg.UDPAddrs()
+	if err != nil {
+		return err
+	}
+	var pcs []net.PacketConn
+	for _, a := range udpAddrs {
+		pc, err := net.ListenPacket("udp", a)
+		if err != nil {
+			for _, p := range pcs {
+				p.Close()
+			}
+			return fmt.Errorf("UDP %s: %w", a, err)
+		}
+		pcs = append(pcs, pc)
+	}
+	srvDone := make(chan error, len(pcs))
+	for _, pc := range pcs {
+		go func() {
+			defer pc.Close()
+			srvDone <- masque.ServeUDP(srv, pc, cidLen)
+		}()
+	}
+	ports, _ := cfg.UDPPorts()
+	log.Info("сервер запущен", "listen", cfg.Listen, "udp_ports", ports, "tun", dev.Name(), "gateway", gwAddrs,
 		"mtu", dev.MTU(), "webtransport", *cfg.WebTransport, "кадры", packing != nil,
 		"профиль", profileName(cfg, profile))
 
@@ -499,9 +525,14 @@ func run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		// то есть будет висеть десятки секунд вместо мгновенного
 		// переподключения. Слушатель теперь наш (см. masque.ServeUDP),
 		// поэтому и ждать его закрытия должны мы.
-		select {
-		case <-srvDone:
-		case <-time.After(2 * time.Second):
+		deadline := time.After(2 * time.Second)
+	wait:
+		for range pcs {
+			select {
+			case <-srvDone:
+			case <-deadline:
+				break wait
+			}
 		}
 		cancel()
 		<-routerDone

@@ -83,14 +83,14 @@ func TestLiteralAddressSkipsResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if addr != "192.0.2.10:443" {
+	if addr != "192.0.2.10" {
 		t.Fatalf("получен адрес %q", addr)
 	}
 	if got := d.ServerIP().String(); got != "192.0.2.10" {
 		t.Fatalf("ServerIP = %q — полный туннель завернёт сам себя", got)
 	}
 	// Маскировка при этом остаётся доменной: в SNI и :authority идёт имя.
-	if got := d.authority(); got != "example.test" {
+	if got := d.authority("443"); got != "example.test" {
 		t.Fatalf("authority = %q, ожидалось имя из server_name", got)
 	}
 }
@@ -162,7 +162,7 @@ func TestProtectedResolverUsesGivenServers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("имя не разрешилось через заданные резолверы: %v", err)
 	}
-	if addr != "203.0.113.7:443" {
+	if addr != "203.0.113.7" {
 		t.Fatalf("получен адрес %q", addr)
 	}
 	if hits.Load() == 0 {
@@ -200,7 +200,7 @@ func TestResolversAskedInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("молчащий первый резолвер не пропущен: %v", err)
 	}
-	if addr != "203.0.113.8:443" {
+	if addr != "203.0.113.8" {
 		t.Fatalf("адрес %q", addr)
 	}
 	if el := time.Since(start); el > perServerTimeout+2*time.Second {
@@ -215,7 +215,7 @@ func TestResolversAskedInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr, err = d2.resolve(t.Context())
-	if err != nil || addr != "203.0.113.8:443" {
+	if err != nil || addr != "203.0.113.8" {
 		t.Fatalf("адрес %q, ошибка %v — ответил не первый резолвер", addr, err)
 	}
 	if n := spareHits.Load(); n != 0 {

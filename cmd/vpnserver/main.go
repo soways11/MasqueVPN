@@ -4,6 +4,7 @@
 //	vpnserver -config /etc/masquevpn/server.json
 //	vpnserver genkey            — сгенерировать общий ключ клиентов
 //	vpnserver clients ...       — управление клиентами (свой ключ у каждого)
+//	vpnserver ports ...         — UDP-порты сервера (основной и запасные)
 //
 // Нужны права root (или CAP_NET_ADMIN): TUN, ip_forward, nf_tables.
 // Внешние утилиты (ip, iptables, nft) не используются — всё через netlink.
@@ -27,6 +28,9 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "clients" {
 		os.Exit(clientsCommand(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "ports" {
+		os.Exit(portsCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "genkey" {
 		key := make([]byte, 32)

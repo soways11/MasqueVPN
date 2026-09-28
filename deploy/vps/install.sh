@@ -11,8 +11,16 @@
 #   sudo ./install.sh ВАШ.ДОМЕН --cert /путь/fullchain.pem --key /путь/privkey.pem
 #
 #       Рядом с чужим веб-сервером. TCP/443 остаётся за ним, masquevpn берёт
-#       только UDP/443 и готовый сертификат из файлов. Обновление
+#       только UDP и готовый сертификат из файлов. Обновление
 #       сертификата подхватывается без перезапуска.
+#
+#   --ports 8443,2053,2083   свои UDP-порты: первый — основной, остальные —
+#                            запасные, клиент перебирает их сам, если
+#                            провайдер режет основной
+#   --ports default          стандартный набор: 443 8443 2053 2083 2087 2096
+#
+#       Без --ports новая установка берёт стандартный набор (занятые порты
+#       из него пропускаются), а обновление оставляет порты как были.
 #
 # Скрипт ничего не делает молча и до первого изменения проверяет то, на чём
 # установка обычно и спотыкается: права, архитектуру, занятые порты и A-запись
@@ -25,11 +33,14 @@ MODE="staging"
 CERT=""
 KEY=""
 COVER=""
+PORTS_ARG=""
+DEFAULT_PORTS="443 8443 2053 2083 2087 2096"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --production) MODE="--production" ;;
         --cover) COVER="${2:-}"; shift ;;
+        --ports) PORTS_ARG="${2:-}"; [ -n "$PORTS_ARG" ] || { echo "--ports: нужен список или default" >&2; exit 2; }; shift ;;
         --cert) CERT="${2:-}"; shift ;;
         --key)  KEY="${2:-}";  shift ;;
         -*) echo "неизвестный ключ: $1" >&2; exit 2 ;;
@@ -73,42 +84,90 @@ esac
 say "архитектура $(uname -m), беру $BIN"
 
 # ---------- порты ----------
-# Занятый 443 — самая частая причина неудачи: там обычно уже стоит nginx,
-# Caddy или другая панель. Обнаружить это до установки, а не после.
-busy() {
-    if command -v ss >/dev/null 2>&1; then
-        ss -lnH "$1" 2>/dev/null | awk '{print $5}' | grep -qE "[:.]443$"
+# Портов несколько: основной и запасные. Провайдеры режут UDP по номеру
+# порта (у одного из наших клиентов не проходил UDP/443 целиком), и клиент
+# в таком случае сам переходит на следующий порт из списка.
+EXISTING_CFG=""
+for c in /etc/masquevpn/server.json /etc/govpn/server.json; do
+    if [ -f "$c" ]; then EXISTING_CFG="$c"; break; fi
+done
+
+# PORT_MODE: set — задано явно списком, default — стандартный набор (явно или
+# на новой установке), keep — обновление без --ports, порты как в конфигурации.
+if [ -n "$PORTS_ARG" ]; then
+    if [ "$PORTS_ARG" = "default" ]; then
+        PORT_LIST="$DEFAULT_PORTS"; PORT_MODE=default
     else
-        return 1
+        PORT_LIST=$(echo "$PORTS_ARG" | tr ',;' '  ')
+        PORT_MODE=set
     fi
-}
-# UDP/443 — это сам транспорт туннеля, без него никак.
-if busy -u; then
-    echo "UDP/443 занят:" >&2
-    ss -lnup 2>/dev/null | grep -E "[:.]443 " >&2 || true
-    die "освободите UDP/443 — это и есть транспорт туннеля (QUIC)."
+elif [ -n "$EXISTING_CFG" ]; then
+    PORT_LIST=$("$here/$BIN" ports -config "$EXISTING_CFG" 2>/dev/null) ||
+        die "не удалось прочитать порты из $EXISTING_CFG — проверьте её: $here/$BIN -config $EXISTING_CFG -check"
+    PORT_MODE=keep
+else
+    PORT_LIST="$DEFAULT_PORTS"; PORT_MODE=default
 fi
+
+seen=" "
+for p in $PORT_LIST; do
+    case "$p" in ''|*[!0-9]*) die "--ports: «$p» — не номер порта" ;; esac
+    [ "$p" -ge 1 ] && [ "$p" -le 65535 ] || die "--ports: $p — порт должен быть от 1 до 65535"
+    case "$seen" in *" $p "*) die "--ports: порт $p указан дважды" ;; esac
+    seen="$seen$p "
+done
+
+# udp_owner ПОРТ — кто слушает UDP-порт (пусто — никто). Свой же прежний
+# сервер (vpnserver) при обновлении помехой не считается.
+udp_owner() {
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -lnupH "( sport = :$1 )" 2>/dev/null | sed -n 's/.*users:((\("[^"]*"\).*/\1/p' | tr -d '"' | head -1
+}
+FREE=""
+for p in $PORT_LIST; do
+    owner=$(udp_owner "$p")
+    if [ -z "$owner" ] || [ "$owner" = "vpnserver" ]; then
+        FREE="$FREE $p"
+        continue
+    fi
+    if [ "$PORT_MODE" = "default" ]; then
+        echo "ПРЕДУПРЕЖДЕНИЕ: UDP/$p занят ($owner) — пропускаю его" >&2
+    else
+        die "UDP/$p занят ($owner). Освободите его или выберите другие: --ports 8443,2053,..."
+    fi
+done
+PORT_LIST=$(echo $FREE)
+[ -n "$PORT_LIST" ] || die "все выбранные UDP-порты заняты — укажите свободные: --ports 8443,2053,..."
+FIRST_PORT=${PORT_LIST%% *}
+PORTS_CSV=$(echo "$PORT_LIST" | tr ' ' ',')
+say "UDP-порты: $PORT_LIST (основной $FIRST_PORT)"
 
 # TCP/443 нужен только своему сертификату: проверка Let's Encrypt приходит
 # по TCP. Если там уже чужой веб-сервер — это не беда, а даже удобно: он
-# станет сайтом-прикрытием. Но тогда сертификат нужен готовый.
-if busy -t; then
+# станет сайтом-прикрытием. Но тогда сертификат нужен готовый. Наш же
+# прежний сервер на TCP/443 (обновление) помехой не считается.
+tcp_owner() {
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -lntpH "( sport = :$1 )" 2>/dev/null | sed -n 's/.*users:((\("[^"]*"\).*/\1/p' | tr -d '"' | head -1
+}
+tcp_443=$(tcp_owner 443)
+if [ -n "$tcp_443" ] && [ "$tcp_443" != "vpnserver" ]; then
     if [ "$OWN_CERT" = "no" ]; then
         echo "TCP/443 занят:" >&2
         ss -lntp 2>/dev/null | grep -E "[:.]443 " >&2 || true
-        die "там уже чужой веб-сервер, и проверку Let's Encrypt провести нечем.
+        die "там уже чужой веб-сервер ($tcp_443), и проверку Let's Encrypt провести нечем.
      Два выхода:
        1) оставить его и дать masquevpn готовый сертификат (тот же, что у него):
             sudo sh install.sh $DOMAIN --cert /etc/letsencrypt/live/$DOMAIN/fullchain.pem \\
                                        --key  /etc/letsencrypt/live/$DOMAIN/privkey.pem
-          masquevpn возьмёт только UDP/443, TCP останется за ним;
+          masquevpn возьмёт только UDP, TCP останется за ним;
        2) освободить TCP/443 и ставить с выдачей сертификата."
     fi
-    say "TCP/443 занят чужим веб-сервером — беру только UDP/443, сертификат из файлов"
+    say "TCP/443 занят чужим веб-сервером ($tcp_443) — беру только UDP, сертификат из файлов"
     TCP_BUSY=yes
 else
     TCP_BUSY=no
-    say "порты 443/tcp и 443/udp свободны"
+    [ "$OWN_CERT" = "no" ] && say "TCP/443 свободен — возьму его для сертификата и обычного HTTPS"
 fi
 
 # ---------- A-запись ----------
@@ -175,16 +234,31 @@ fi
 # ---------- что будет сделано ----------
 # До этого места скрипт только смотрел. Дальше он меняет систему, поэтому
 # сначала показывает, что именно, — на чужом сервере иначе нельзя.
+UDP_WORDS=$(echo "$PORT_LIST" | sed 's#\([0-9][0-9]*\)#\1/udp#g')
 if [ "$OWN_CERT" = "yes" ]; then
-    PORTS="443/udp — и только его; TCP остаётся за соседом"
+    PORTS="$UDP_WORDS; TCP остаётся за соседом"
     CERT_WHERE="$CERT
                   (обновление подхватывается без перезапуска)"
     ACME_LINE=""
 else
-    PORTS="443/tcp и 443/udp"
+    PORTS="$UDP_WORDS и 443/tcp"
     CERT_WHERE="Let's Encrypt, режим ${MODE#--}"
     ACME_LINE="  /var/lib/masquevpn/acme/                  ключ аккаунта и сертификаты
 "
+fi
+# Файрвол на самой машине: если включён ufw или firewalld, порты надо
+# открыть, иначе запасные порты есть только на бумаге.
+FIREWALL=""
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    FIREWALL=ufw
+elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    FIREWALL=firewalld
+fi
+if [ -n "$FIREWALL" ]; then
+    FIREWALL_LINE="  Файрвол ($FIREWALL): будут открыты $UDP_WORDS
+"
+else
+    FIREWALL_LINE=""
 fi
 if [ -n "$COVER" ]; then
     COVER_LINE="  Сайт-прикрытие: $COVER"
@@ -196,7 +270,7 @@ cat <<EOF
 Проверки пройдены. Будет сделано:
 
   /usr/local/bin/vpnserver              бинарник сервера
-  /etc/masquevpn/server.json                конфигурация (домен $DOMAIN)
+  /etc/masquevpn/server.json                конфигурация (домен $DOMAIN, порты $PORT_LIST)
   /etc/masquevpn/clients.json               реестр клиентов, первый клиент
 $ACME_LINE  /etc/systemd/system/masquevpn.service     служба, запуск при загрузке
 
@@ -206,7 +280,7 @@ $COVER_LINE
 
   Создаётся своя таблица nftables (inet masquevpn) — существующие правила
   не трогаются.  Отменить всё: sudo sh $here/uninstall.sh
-
+$FIREWALL_LINE
 EOF
 if [ "${MASQUEVPN_YES:-${GOVPN_YES:-}}" != "1" ]; then
     printf "Продолжить? [y/N] "
@@ -298,11 +372,24 @@ fi
 
 if [ -f /etc/masquevpn/server.json ]; then
     say "конфигурация уже есть, не трогаю: /etc/masquevpn/server.json"
+    if [ "$PORT_MODE" != "keep" ]; then
+        # Порты — единственное, что правится в готовой конфигурации: их и
+        # просили. Правит сам сервер (разбором JSON, с проверкой и копией).
+        /usr/local/bin/vpnserver ports -config /etc/masquevpn/server.json -set "$PORTS_CSV" ||
+            die "не удалось записать порты в /etc/masquevpn/server.json"
+    fi
 else
     say "пишу /etc/masquevpn/server.json"
+    ALT=$(echo "$PORT_LIST" | cut -s -d' ' -f2- | sed 's/ /, /g')
+    if [ -n "$ALT" ]; then
+        ALT_BLOCK="
+  \"alt_ports\": [$ALT],"
+    else
+        ALT_BLOCK=""
+    fi
     cat > /etc/masquevpn/server.json <<EOF
 {
-  "listen": ":443",
+  "listen": ":$FIRST_PORT",$ALT_BLOCK
 $ACME_BLOCK$CERT_BLOCK
 
   "clients_file": "/etc/masquevpn/clients.json",
@@ -380,10 +467,25 @@ else
     say "завожу первого клиента"
     # Ключ и ссылка — только в файлы (0600), не в терминал: вывод терминала
     # оседает в истории, журналах панелей хостинга и записях сессий.
-    /usr/local/bin/vpnserver clients add -file /etc/masquevpn/clients.json \
-        -name "first" -server "$DOMAIN:443" -out /etc/masquevpn/client-first.json
+    # -config, а не -file: из конфигурации берутся запасные порты, и
+    # ссылка первого клиента сразу знает их все.
+    /usr/local/bin/vpnserver clients add -config /etc/masquevpn/server.json \
+        -name "first" -server "$DOMAIN:$FIRST_PORT" -out /etc/masquevpn/client-first.json
     chmod 0600 /etc/masquevpn/clients.json
 fi
+
+# ---------- файрвол ----------
+case "$FIREWALL" in
+    ufw)
+        for p in $PORT_LIST; do ufw allow "$p/udp" >/dev/null; done
+        say "ufw: открыты $UDP_WORDS"
+        ;;
+    firewalld)
+        for p in $PORT_LIST; do firewall-cmd --permanent --add-port="$p/udp" >/dev/null; done
+        firewall-cmd --reload >/dev/null
+        say "firewalld: открыты $UDP_WORDS"
+        ;;
+esac
 
 # ---------- служба ----------
 say "ставлю службу systemd"
@@ -445,6 +547,8 @@ echo
 say "готово. Что дальше:"
 echo "   журнал:        journalctl -u masquevpn -f"
 echo "   клиенты:       vpnserver clients list -config /etc/masquevpn/server.json"
+echo "   новый клиент:  vpnserver clients add -config /etc/masquevpn/server.json -name ИМЯ -server $DOMAIN:$FIRST_PORT -out /root/ИМЯ.json"
+echo "   порты UDP:     $PORT_LIST — откройте их и в файрволе хостинга (панель провайдера), если он есть"
 echo "   доступ первого клиента: /etc/masquevpn/client-first.link (ссылка = ключ, не пересылайте открыто)"
 echo "   диагностика:   sudo sh $here/diag.sh"
 if [ "$OWN_CERT" = "no" ] && [ "$MODE" != "--production" ]; then

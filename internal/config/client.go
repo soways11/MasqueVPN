@@ -9,6 +9,8 @@ import (
 // Client — конфигурация клиента. Один формат для всех платформ.
 type Client struct {
 	// Server — адрес сервера host:port. Host — домен (он же SNI) или IP.
+	// Запасные порты перечисляются через запятую: host:8443,2053,2083 —
+	// клиент перебирает их, если предыдущий не отвечает (см. ports.go).
 	Server string `json:"server"`
 	// ServerName — SNI и :authority, если отличаются от host из Server.
 	ServerName string `json:"server_name,omitempty"`
@@ -270,7 +272,7 @@ func UsableDNS(servers []netip.Addr, addrs []netip.Prefix) []netip.Addr {
 // Validate проверяет конфигурацию.
 func (c *Client) Validate() error {
 	var errs []error
-	if _, _, err := splitHostPort("server", c.Server); err != nil {
+	if _, _, err := SplitServer(c.Server); err != nil {
 		errs = append(errs, err)
 	}
 	if _, err := c.AuthKey.Bytes(); err != nil {
@@ -313,8 +315,14 @@ func (c *Client) Host() string {
 	if c.ServerName != "" {
 		return c.ServerName
 	}
-	h, _, _ := splitHostPort("server", c.Server)
+	h, _, _ := SplitServer(c.Server)
 	return h
+}
+
+// ServerPorts — порты сервера в порядке перебора.
+func (c *Client) ServerPorts() []string {
+	_, p, _ := SplitServer(c.Server)
+	return p
 }
 
 // KillSwitchAllowed разбирает KillSwitchAllow: принимает и адрес, и подсеть.

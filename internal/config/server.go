@@ -13,8 +13,12 @@ import (
 
 // Server — конфигурация vpnserver.
 type Server struct {
-	// Listen — UDP-адрес, по умолчанию ":443".
+	// Listen — UDP-адрес, по умолчанию ":443". Его порт — основной.
 	Listen string `json:"listen,omitempty"`
+	// AltPorts — запасные UDP-порты на том же адресе (см. ports.go). Клиент
+	// перебирает их, когда основной не отвечает: провайдеры режут UDP по
+	// номеру порта. TCP-слушатель от них не зависит.
+	AltPorts []int `json:"alt_ports,omitempty"`
 	// CertFile, KeyFile — сертификат и ключ (PEM). При включённом ACME не
 	// обязательны: если заданы, используются как запасные, пока Let's Encrypt
 	// недоступен.
@@ -283,7 +287,7 @@ func (c *Server) Validate() error {
 			errs = append(errs, err)
 		}
 	}
-	if _, _, err := splitHostPort("listen", c.Listen); err != nil {
+	if _, err := c.UDPPorts(); err != nil {
 		errs = append(errs, err)
 	}
 	if err := c.TUN.validate(); err != nil {

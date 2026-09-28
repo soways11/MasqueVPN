@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,7 +50,11 @@ const clientsUsage = `vpnserver clients — управление клиента�
   -period month|day   когда сбрасывать квоту (по умолчанию month при quota)
   -max-sessions N     сколько сессий разрешено одновременно
   -rate РАЗМЕР        потолок полосы, например 20MB (в секунду)
-  -server АДРЕС       адрес сервера для готовой конфигурации клиента
+  -server АДРЕС       адрес сервера для готовой конфигурации клиента;
+                      запасные порты из конфигурации сервера (alt_ports)
+                      дописываются сами: host:8443 → host:8443,2053,…
+  -single-port        не дописывать запасные порты (клиенты до 0.4.0 не
+                      понимают адрес с несколькими портами)
   -note ТЕКСТ         пометка
   -out ФАЙЛ           записать конфигурацию в файл; ключ и ссылка
                       не попадут в терминал (рядом ляжет ФАЙЛ.link)
@@ -79,6 +84,7 @@ func clientsCommand(args []string) int {
 	maxSessions := fs.Int("max-sessions", 0, "сколько сессий разрешено одновременно")
 	rate := fs.String("rate", "", "потолок полосы в секунду (например 20MB)")
 	server := fs.String("server", "", "адрес сервера для конфигурации клиента")
+	singlePort := fs.Bool("single-port", false, "не дописывать запасные порты")
 	note := fs.String("note", "", "пометка")
 	out := fs.String("out", "", "куда записать конфигурацию клиента или резервную копию")
 	from := fs.String("from", "", "из какой копии восстанавливать (restore)")
@@ -86,13 +92,19 @@ func clientsCommand(args []string) int {
 		return 2
 	}
 
-	path, srvFromCfg, err := clientsPath(*cfgPath, *file)
+	path, srvFromCfg, cfgPorts, err := clientsPath(*cfgPath, *file)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "vpnserver clients:", err)
 		return 2
 	}
 	if *server == "" {
 		*server = srvFromCfg
+	}
+	if *server != "" && sub == "add" {
+		if *server, err = withServerPorts(*server, cfgPorts, *singlePort); err != nil {
+			fmt.Fprintln(os.Stderr, "vpnserver clients: -server:", err)
+			return 2
+		}
 	}
 	reg, err := clients.Open(path)
 	if err != nil {
@@ -211,24 +223,56 @@ func clientsList(reg *clients.Registry, acc *clients.Accountant) int {
 }
 
 // clientsPath выясняет, где лежит реестр: из -file либо из конфигурации.
-func clientsPath(cfgPath, file string) (path, server string, err error) {
+func clientsPath(cfgPath, file string) (path, server string, ports []int, err error) {
 	if file != "" {
-		return file, "", nil
+		return file, "", nil, nil
 	}
 	if cfgPath == "" {
 		cfgPath = config.DefaultServerConfig()
 	}
 	cfg, err := config.LoadServer(cfgPath)
 	if err != nil {
-		return "", "", fmt.Errorf("%s: %w (укажите -file, если конфигурации нет)", cfgPath, err)
+		return "", "", nil, fmt.Errorf("%s: %w (укажите -file, если конфигурации нет)", cfgPath, err)
 	}
 	if cfg.ClientsFile == "" {
-		return "", "", errors.New("в конфигурации не задан clients_file")
+		return "", "", nil, errors.New("в конфигурации не задан clients_file")
+	}
+	ports, err = cfg.UDPPorts()
+	if err != nil {
+		return "", "", nil, err
 	}
 	if len(cfg.ACME.Domains) > 0 {
-		server = cfg.ACME.Domains[0] + ":443"
+		server = config.JoinServer(cfg.ACME.Domains[0], ports)
 	}
-	return cfg.ClientsFile, server, nil
+	return cfg.ClientsFile, server, ports, nil
+}
+
+// withServerPorts дописывает к адресу из -server запасные порты сервера.
+//
+// Человек пишет адрес так, как привык, — «домен:8443», — а клиент должен
+// знать все порты: иначе при блокировке основного ему некуда уйти. Порт из
+// адреса идёт первым (с него клиент начнёт), остальные — в порядке
+// конфигурации. Адрес, где порты уже перечислены, не трогаем: значит, их
+// выбрали сознательно.
+func withServerPorts(server string, cfgPorts []int, single bool) (string, error) {
+	host, ports, err := config.SplitServer(config.WithDefaultPort(server))
+	if err != nil {
+		return "", err
+	}
+	if single {
+		return net.JoinHostPort(host, ports[0]), nil
+	}
+	if len(ports) > 1 || len(cfgPorts) < 2 {
+		return config.WithDefaultPort(server), nil
+	}
+	first, _ := strconv.Atoi(ports[0])
+	out := []int{first}
+	for _, p := range cfgPorts {
+		if p != first {
+			out = append(out, p)
+		}
+	}
+	return config.JoinServer(host, out), nil
 }
 
 func usagePathFor(clientsFile, cfgPath string) string {
@@ -269,7 +313,12 @@ func clientsIssue(w io.Writer, c clients.Client, server, out string) int {
 		return 1
 	}
 
-	fmt.Fprintf(w, "клиент создан: %s  %s\n\n", c.ID, c.Name)
+	fmt.Fprintf(w, "клиент создан: %s  %s\n", c.ID, c.Name)
+	if _, ports, err := config.SplitServer(cfg.Server); err == nil && len(ports) > 1 {
+		fmt.Fprintf(w, "порты сервера:  %s — клиент перебирает их сам, если основной закрыт\n", strings.Join(ports, ", "))
+		fmt.Fprintln(w, "                (такой адрес понимают клиенты 0.4.0 и новее; для старых — -single-port)")
+	}
+	fmt.Fprintln(w)
 
 	if out != "" {
 		linkPath := strings.TrimSuffix(out, filepath.Ext(out)) + ".link"

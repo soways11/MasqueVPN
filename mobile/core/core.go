@@ -226,7 +226,7 @@ func (t *Tunnel) connect(configJSON string, p Protector) (string, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	dctx, dcancel := context.WithTimeout(ctx, 30*time.Second)
+	dctx, dcancel := context.WithTimeout(ctx, dialer.ConnectTimeout())
 	defer dcancel()
 
 	onRotate := func(old, new []netip.Prefix) {

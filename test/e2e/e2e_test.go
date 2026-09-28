@@ -197,6 +197,12 @@ func (p *proc) waitLog(t *testing.T, substr string, d time.Duration) {
 		}
 		select {
 		case <-p.done:
+			// Процесс мог записать строку и сразу выйти — между проверкой
+			// выше и этим select. Весь вывод к этому моменту уже прочитан
+			// (Wait дожидается копирования), так что смотрим ещё раз.
+			if strings.Contains(p.Log(), substr) {
+				return
+			}
 			t.Fatalf("%s завершился, не дождавшись %q:\n%s", p.name, substr, p.Log())
 		case <-time.After(50 * time.Millisecond):
 		}

@@ -52,10 +52,23 @@ run sh -c 'grep -c "\"id\"" /etc/masquevpn/clients.json 2>/dev/null | sed "s/^/�
 run sh -c '/usr/local/bin/vpnserver clients list -config /etc/masquevpn/server.json 2>&1 | sed "s/[A-Za-z0-9+\/]\{40,\}=*/<скрыто>/g"'
 
 section "порты"
-# UDP/443 — это сам туннель. TCP/443 может быть и чужим: masquevpn умеет стоять
-# рядом с nginx, и тогда TCP не его.
-run sh -c 'echo "--- UDP (транспорт туннеля, должен быть за vpnserver) ---";
-           ss -lnup 2>/dev/null | grep -E "[:.]443 " || echo "НИКТО НЕ СЛУШАЕТ UDP/443 — туннель работать не будет"'
+# UDP — это сам туннель: основной порт и запасные (alt_ports), каждый должен
+# быть за vpnserver. TCP/443 может быть и чужим: masquevpn умеет стоять рядом
+# с nginx, и тогда TCP не его.
+run sh -c 'ports=$(/usr/local/bin/vpnserver ports -config /etc/masquevpn/server.json 2>&1) || { echo "$ports"; exit 0; }
+           echo "UDP-порты в конфигурации: $ports"
+           for p in $ports; do
+               line=$(ss -lnupH "( sport = :$p )" 2>/dev/null)
+               case "$line" in
+                   *vpnserver*) echo "UDP/$p: vpnserver слушает" ;;
+                   "")          echo "UDP/$p: НИКТО НЕ СЛУШАЕТ — клиенты на этом порту не подключатся" ;;
+                   *)           echo "UDP/$p: занят чужим: $line" ;;
+               esac
+           done'
+run sh -c 'echo "--- файрвол на машине (облачный файрвол хостинга отсюда не виден) ---";
+           if command -v ufw >/dev/null 2>&1; then ufw status 2>&1 | head -20; fi
+           if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --list-ports 2>&1; fi
+           nft list ruleset 2>/dev/null | grep -E "udp dport|policy drop" | head -10 || true'
 run sh -c 'echo "--- TCP (может быть занят соседом, это допустимо) ---";
            ss -lntp 2>/dev/null | grep -E "[:.]443 " || echo "на TCP/443 никого"'
 
