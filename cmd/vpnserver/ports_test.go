@@ -82,8 +82,11 @@ func testServerConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "server.json")
+	// Путь — через json.Marshal: в Windows в нём обратные слэши, и
+	// вставленный как есть он ломал бы JSON («\U» — не escape-последовательность).
+	clients, _ := json.Marshal(filepath.Join(dir, "clients.json"))
 	cfg := strings.Replace(installLike, `"clients_file": "/etc/masquevpn/clients.json",`,
-		`"clients_file": "`+filepath.Join(dir, "clients.json")+`",`, 1)
+		`"clients_file": `+string(clients)+`,`, 1)
 	if err := os.WriteFile(p, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
