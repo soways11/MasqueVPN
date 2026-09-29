@@ -146,17 +146,23 @@ func buildClientHello(sni string, scid []byte) []byte {
 		MinVersion: tls.VersionTLS13,
 		MaxVersion: tls.VersionTLS13,
 	}
-	// Минимальные транспортные параметры: initial_source_connection_id = SCID.
+	// Минимальные транспортные параметры. Длину каждого пишем как РЕАЛЬНУЮ
+	// длину значения в QUIC-варинте, а не на глаз: varint(30000) — это 4 байта
+	// (30000 > 2^14), и если объявить длину 2, живой сервер отвергнет
+	// рукопожатие через CONNECTION_CLOSE в Initial.
 	var tp []byte
-	tp = append(tp, varint(0x0f)...) // initial_source_connection_id
+	addTP := func(id, val uint64) {
+		v := varint(val)
+		tp = append(tp, varint(id)...)
+		tp = append(tp, varint(uint64(len(v)))...)
+		tp = append(tp, v...)
+	}
+	// initial_source_connection_id: значение — сырой SCID, не varint.
+	tp = append(tp, varint(0x0f)...)
 	tp = append(tp, varint(uint64(len(scid)))...)
 	tp = append(tp, scid...)
-	tp = append(tp, varint(0x04)...) // initial_max_data
-	tp = append(tp, varint(4)...)
-	tp = append(tp, varint(1<<20)...)
-	tp = append(tp, varint(0x01)...) // max_idle_timeout
-	tp = append(tp, varint(2)...)
-	tp = append(tp, varint(30000)...)
+	addTP(0x04, 1<<20) // initial_max_data
+	addTP(0x01, 30000) // max_idle_timeout
 
 	qc := tls.QUICClient(&tls.QUICConfig{TLSConfig: cfg})
 	qc.SetTransportParameters(tp)
