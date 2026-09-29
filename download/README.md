@@ -1,6 +1,6 @@
-# Установщики masquevpn 0.4.0
+# Установщики masquevpn 0.4.1
 
-Последний выпуск: [v0.4.0](https://github.com/soways11/MasqueVPN/releases/tag/v0.4.0).
+Последний выпуск: [v0.4.1](https://github.com/soways11/MasqueVPN/releases/tag/v0.4.1).
 
 | система | файл | как поставить |
 |---|---|---|
@@ -14,8 +14,8 @@
 ## SHA-256
 
 ```
-0086c2d860c47824f89b45d75b160d19ef013d03dac591112779c97dffa36ee4  android/masquevpn.apk
-dd6c568542caa44287cd7bb0592940cf9bcceec8ed35a5a881d0e07795432c33  linux/masquevpn_amd64.deb
-ca882d4fc117738661e9ed57608d85fbbb3aa1f7a19c7ab56df0f1e91fe3f334  linux/masquevpn_arm64.deb
-5d71092d6c43874409b5675d58c8a6bfbee27ff1099e8f86a6d87bfd9b8503f3  windows/masquevpn-setup.exe
+cd650c70ccd926602059ddf7e464403c07acf97bc4c76d9e708c392b58c3c5b9  android/masquevpn.apk
+67b54f6cabde53a757a5365548441603c1e157924d1548feab4ad3399156f5b0  linux/masquevpn_amd64.deb
+00ed20c82b66a64f99dd9dd651f2bd183781f232a3706155e849476ef83181ab  linux/masquevpn_arm64.deb
+426a8126e74496d1a8d2d2037e4e4eaefe6ba531cc00a302724e3442a1ce581f  windows/masquevpn-setup.exe
 ```
