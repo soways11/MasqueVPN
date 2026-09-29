@@ -8,10 +8,12 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"syscall"
 	"time"
 
+	"github.com/soways11/masquevpn/internal/client"
 	"github.com/soways11/masquevpn/internal/config"
 	"github.com/soways11/masquevpn/internal/dnscover"
 	"github.com/soways11/masquevpn/internal/masque"
@@ -147,4 +149,10 @@ func StartDNSCover(ctx context.Context, cfg *config.Client, protect func(syscall
 		out = append(out, s.Addr())
 	}
 	return out
+}
+
+// portMemory — где клиент помнит удачный порт сервера между запусками:
+// рядом с профилями (config.DataDir). См. client.PortMemory.
+func portMemory() client.PortMemory {
+	return client.FilePortMemory(filepath.Join(config.DataDir(), client.PortsFile))
 }

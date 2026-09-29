@@ -54,6 +54,9 @@ type Options struct {
 	// слушает («connection refused»). Настоящие резолверы сети знает
 	// только система, и приложение передаёт их сюда.
 	Resolvers []netip.AddrPort
+	// Ports — где помнить удачный порт сервера между запусками (см.
+	// PortMemory). nil — помнить только до конца процесса.
+	Ports PortMemory
 }
 
 func deviceID(opt Options) string {
@@ -77,6 +80,7 @@ type Dialer struct {
 	// cur — номер последнего ответившего: следующий дозвон начинается с него.
 	ports    []string
 	cur      atomic.Int32
+	okPort   atomic.Value // string: порт последнего удачного дозвона
 	resolver *net.Resolver
 	// fixed — резолверы по одному на сервер из Options.Resolvers, по порядку.
 	fixed []*net.Resolver
@@ -157,6 +161,18 @@ func NewDialer(cfg *config.Client, opt Options) (*Dialer, error) {
 	}
 	d.host, d.ports = host, ports
 	d.attempt = d.dialPort
+	// Начинаем с порта, который ответил в прошлый раз, — если он всё ещё в
+	// списке (порты сервера могли смениться с тех пор).
+	if opt.Ports != nil {
+		if p := opt.Ports.Port(d.host); p != "" {
+			for i, q := range d.ports {
+				if q == p {
+					d.cur.Store(int32(i))
+					break
+				}
+			}
+		}
+	}
 	// Резолвер по умолчанию системный, и это не мелочь. Системный знает
 	// порядок адаптеров, NRPT, файл hosts и настройки DNS-over-HTTPS;
 	// встроенный в Go берёт серверы со ВСЕХ адаптеров подряд — включая
@@ -339,8 +355,14 @@ func (d *Dialer) Dial(ctx context.Context) (*masque.Conn, error) {
 		last := i == n-1
 		c, err := d.attempt(ctx, ip, port, last)
 		if err == nil {
-			if prev := int(d.cur.Swap(int32(idx))); prev != idx || i > 0 {
+			d.cur.Store(int32(idx))
+			// Сообщаем и запоминаем, только когда порт сменился: ротация и
+			// переподключения на том же порту — обычное дело.
+			if prev, _ := d.okPort.Swap(port).(string); prev != port && n > 1 {
 				d.log.Info("сервер отвечает на порту "+port, "port", port)
+				if d.opt.Ports != nil {
+					d.opt.Ports.Remember(d.host, port)
+				}
 			}
 			return c, nil
 		}
@@ -368,6 +390,33 @@ const perPortTimeout = 8 * time.Second
 func (d *Dialer) ConnectTimeout() time.Duration {
 	return max(30*time.Second, time.Duration(len(d.ports))*perPortTimeout+10*time.Second)
 }
+
+// stall — сторож сессии признал путь мёртвым (см. session.Config.StallAfter):
+// порт, по которому шла связь, посреди сессии перестал пропускать пакеты.
+// Переподключение начнётся со следующего порта: этот, скорее всего, начали
+// резать. Если это была не блокировка, а пропавшая сеть, — не беда: перебор
+// идёт по кругу и дойдёт до него снова.
+func (d *Dialer) stall() {
+	n := len(d.ports)
+	cur := int(d.cur.Load()) % n
+	if n == 1 {
+		d.log.Warn("связь с сервером пропала посреди сессии — переподключаюсь", "port", d.ports[cur])
+		return
+	}
+	next := (cur + 1) % n
+	d.cur.Store(int32(next))
+	d.log.Warn("порт "+d.ports[cur]+" перестал отвечать посреди сессии — переподключаюсь через "+d.ports[next],
+		"port", d.ports[cur], "next", d.ports[next])
+}
+
+// Сторож пути (см. session.Config.StallAfter): через сколько тишины при
+// отправке проверять путь и сколько ждать ответа на проверку. Вместе с
+// рукопожатием на следующем порту туннель оживает секунд за 10–15 — против
+// 30–60 по таймауту простоя QUIC.
+const (
+	stallAfter   = 6 * time.Second
+	probeTimeout = 4 * time.Second
+)
 
 // Ports — порты сервера в порядке перебора.
 func (d *Dialer) Ports() []string { return append([]string(nil), d.ports...) }
@@ -587,6 +636,12 @@ func (d *Dialer) OpenSession(ctx context.Context, onRotate func(old, new []netip
 		KeepAddress: *d.cfg.Rotation.KeepAddress,
 		Reconnect:   !d.cfg.NoReconnect,
 		OnRotate:    onRotate,
+		// Порт могут начать резать посреди сессии — пакеты тогда пропадают
+		// молча. Сторож замечает это и переводит клиент на следующий порт
+		// (см. stall); адрес в туннеле при этом сохраняется.
+		StallAfter:   stallAfter,
+		ProbeTimeout: probeTimeout,
+		OnStall:      d.stall,
 		OnReconnect: func(attempt int, err error) {
 			if err != nil {
 				d.log.Warn("переподключение не удалось", "attempt", attempt, "err", err)

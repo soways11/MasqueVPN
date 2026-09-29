@@ -14,6 +14,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"net/http"
 	"net/netip"
 	"slices"
 	"sync"
@@ -53,6 +54,27 @@ type env struct {
 
 func startEnv(t *testing.T, onConn ...func(*masque.Conn)) *env {
 	t.Helper()
+	return startEnvWith(t, nil, onConn...)
+}
+
+// startEnvWith — то же, но сервер можно заставить молчать: пока silent
+// взведён, он читает пакеты и ничего не отвечает (путь при этом жив).
+func startEnvWith(t *testing.T, silent *atomic.Bool, onConn ...func(*masque.Conn)) *env {
+	t.Helper()
+	return startEnvOpts(t, envOpts{silent: silent}, onConn...)
+}
+
+type envOpts struct {
+	silent *atomic.Bool
+	// identified — сервер опознаёт клиента, как боевой (auth): адрес
+	// закрепляется за клиентом и устройством и возвращается ему сразу, даже
+	// пока старая сессия ещё не закрыта.
+	identified bool
+}
+
+func startEnvOpts(t *testing.T, o envOpts, onConn ...func(*masque.Conn)) *env {
+	t.Helper()
+	silent := o.silent
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -72,8 +94,13 @@ func startEnv(t *testing.T, onConn ...func(*masque.Conn)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var identify func(*http.Request) (string, string, bool)
+	if o.identified {
+		identify = func(*http.Request) (string, string, bool) { return "c1", "d1", true }
+	}
 	h, err := masque.NewHandler(masque.ServerConfig{
-		Pool: ipPool,
+		Pool:     ipPool,
+		Identify: identify,
 		OnSession: func(ctx context.Context, c *masque.Conn, _ netip.Prefix) {
 			for _, f := range onConn {
 				f(c)
@@ -83,6 +110,9 @@ func startEnv(t *testing.T, onConn ...func(*masque.Conn)) *env {
 				n, err := c.ReadPacket(buf)
 				if err != nil {
 					return
+				}
+				if silent != nil && silent.Load() {
+					continue
 				}
 				swap(buf[:n])
 				_ = c.WritePacket(buf[:n])
@@ -104,9 +134,12 @@ func startEnv(t *testing.T, onConn ...func(*masque.Conn)) *env {
 	return &env{addr: pc.LocalAddr().String(), client: &tls.Config{RootCAs: pool, ServerName: "localhost"}}
 }
 
-func (e *env) dialFunc() DialFunc {
+func (e *env) dialFunc() DialFunc { return e.dialTo(func() string { return e.addr }) }
+
+// dialTo — дозвон по адресу, который выбирается при каждом дозвоне.
+func (e *env) dialTo(addr func() string) DialFunc {
 	return func(ctx context.Context) (*masque.Conn, error) {
-		c, err := masque.Dial(ctx, masque.ClientConfig{Addr: e.addr, TLSConfig: e.client, Authority: "localhost"})
+		c, err := masque.Dial(ctx, masque.ClientConfig{Addr: addr(), TLSConfig: e.client, Authority: "localhost"})
 		if err != nil {
 			return nil, err
 		}
@@ -641,4 +674,162 @@ func TestStatsSurviveRotation(t *testing.T) {
 		t.Errorf("после ротации счётчики не растут: %d/%d → %d/%d",
 			after.BytesIn, after.BytesOut, grown.BytesIn, grown.BytesOut)
 	}
+}
+
+// relay — UDP-посредник между клиентом и сервером, которого можно
+// «перерезать»: пакеты начинают молча пропадать в обе стороны. Так выглядит
+// порт, который начали резать посреди сессии.
+type relay struct {
+	addr    string
+	blocked atomic.Bool
+}
+
+func newRelay(t *testing.T, target string) *relay {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, err := net.Dial("udp", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close(); up.Close() })
+	r := &relay{addr: pc.LocalAddr().String()}
+	var client atomic.Value
+	go func() {
+		buf := make([]byte, 65536)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if r.blocked.Load() {
+				continue
+			}
+			client.Store(from)
+			_, _ = up.Write(buf[:n])
+		}
+	}()
+	go func() {
+		buf := make([]byte, 65536)
+		for {
+			n, err := up.Read(buf)
+			if err != nil {
+				return
+			}
+			to, _ := client.Load().(net.Addr)
+			if r.blocked.Load() || to == nil {
+				continue
+			}
+			_, _ = pc.WriteTo(buf[:n], to)
+		}
+	}()
+	return r
+}
+
+// sendLoop шлёт пакеты в туннель, пока не закроется stop: сторож следит
+// только за путём, по которому что-то отправляют.
+func sendLoop(s *Session, src netip.Addr, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+		_ = s.WritePacket(buildIPv4(src, netip.MustParseAddr("1.1.1.1"), []byte("load")))
+	}
+}
+
+// TestStallSwitchesPath — путь начали резать посреди сессии: пакеты
+// пропадают молча. Сторож замечает это за секунды (а не по таймауту
+// простоя QUIC), рвёт соединение, клиент переподключается другим путём и
+// получает прежний адрес — соединения внутри туннеля не рвутся.
+func TestStallSwitchesPath(t *testing.T) {
+	e := startEnvOpts(t, envOpts{identified: true})
+	r := newRelay(t, e.addr)
+	var direct atomic.Bool // «следующий порт»
+	stalled := make(chan struct{}, 4)
+	rotated := make(chan []netip.Prefix, 4)
+	s, err := Open(context.Background(), Config{
+		Dial: e.dialTo(func() string {
+			if direct.Load() {
+				return e.addr
+			}
+			return r.addr
+		}),
+		Reconnect:    true,
+		KeepAddress:  true,
+		StallAfter:   600 * time.Millisecond,
+		ProbeTimeout: 600 * time.Millisecond,
+		OnStall: func() {
+			direct.Store(true)
+			stalled <- struct{}{}
+		},
+		OnRotate: func(_, n []netip.Prefix) { rotated <- n },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	before := s.Prefixes()
+	echo(t, s, before[0].Addr())
+
+	r.blocked.Store(true)
+	start := time.Now()
+	stop := make(chan struct{})
+	defer close(stop)
+	go sendLoop(s, before[0].Addr(), stop)
+
+	select {
+	case <-stalled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("сторож не заметил мёртвый путь")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("мёртвый путь замечен через %v — это уже не быстрее таймаута простоя", took)
+	}
+	select {
+	case n := <-rotated:
+		if !slices.Equal(n, before) {
+			t.Fatalf("после переключения адрес %v, ожидался прежний %v", n, before)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("клиент не переподключился другим путём")
+	}
+	if s.Stalls() != 1 {
+		t.Fatalf("сторож сработал %d раз", s.Stalls())
+	}
+	echo(t, s, before[0].Addr())
+}
+
+// TestSilentServerIsNotStall — сервер просто молчит (односторонний поток),
+// а путь жив: проверка связи отвечает, и соединение не рвётся. Иначе
+// любая выгрузка без ответов вызывала бы переподключения.
+func TestSilentServerIsNotStall(t *testing.T) {
+	var silent atomic.Bool
+	e := startEnvWith(t, &silent)
+	s, err := Open(context.Background(), Config{
+		Dial:         e.dialFunc(),
+		Reconnect:    true,
+		StallAfter:   300 * time.Millisecond,
+		ProbeTimeout: 2 * time.Second,
+		OnStall:      func() { t.Error("живой путь признан мёртвым") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	src := s.Prefixes()[0].Addr()
+	echo(t, s, src)
+	silent.Store(true)
+	stop := make(chan struct{})
+	go sendLoop(s, src, stop)
+	time.Sleep(2500 * time.Millisecond)
+	close(stop)
+	if s.Stalls() != 0 || s.Reconnects() != 0 {
+		t.Fatalf("stalls=%d reconnects=%d при живом пути", s.Stalls(), s.Reconnects())
+	}
+	silent.Store(false)
+	echo(t, s, src)
 }

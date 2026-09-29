@@ -348,6 +348,11 @@ func Dial(ctx context.Context, cfg Config) (*masque.Conn, error) {
 		Packing: cfg.Packing,
 		Closer:  closeAll,
 	})
+	// Проверка связи — тем же GET к сайту-прикрытию, что и прикрытие
+	// потоками: снаружи не отличить (см. masque.Conn.Probe).
+	conn.SetProber(func(ctx context.Context) error {
+		return h3.get(ctx, authority, "/", masque.ProbeBodyBytes)
+	})
 	if cfg.CoverBrowsing != nil {
 		h3.startCoverBrowsing(conn, authority, cfg.CoverBrowsing)
 	}

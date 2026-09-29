@@ -23,7 +23,7 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 	if fwmark == 0 {
 		fwmark = netsetup.DefaultFwMark
 	}
-	opt := client.Options{Logger: log}
+	opt := client.Options{Logger: log, Ports: portMemory()}
 	if *cfg.FullTunnel {
 		opt.Protect = func(rc syscall.RawConn) error { return netsetup.MarkSocket(rc, fwmark) }
 	}

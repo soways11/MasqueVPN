@@ -1138,6 +1138,25 @@ func TestBuiltinCoverSite(t *testing.T) {
 			t.Fatalf("%s не отдан:\n%s", p, out)
 		}
 	}
+	// Документация рассказывает то, что видно в протоколе у этого же
+	// сервера: WebTransport (его объявляют SETTINGS) и UDP-порт, на котором
+	// отвечает HTTP/3 (см. internal/site/legends.go).
+	docsSeen := false
+	for _, p := range paths {
+		out := probeTCP(t, s, "GET", p)
+		if !strings.Contains(out, "Network requirements") {
+			continue
+		}
+		docsSeen = true
+		for _, want := range []string{"new WebTransport(", "UDP port 443", "no TCP fallback"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("в документации %s нет %q:\n%s", p, want, out)
+			}
+		}
+	}
+	if !docsSeen {
+		t.Fatal("не нашлась страница документации с требованиями к сети")
+	}
 	if out := probeTCP(t, s, "GET", feed[1]); !strings.Contains(out, `"components"`) {
 		t.Fatalf("фид статуса %s:\n%s", feed[1], out)
 	}

@@ -150,6 +150,8 @@ class MasqueService : VpnService() {
                 // Псевдоним телефона: по одному ключу работают несколько
                 // устройств, и у каждого должен быть свой адрес.
                 tunnel.setDeviceID(Store.deviceId(this))
+                // Где ядру помнить удачный порт сервера между запусками.
+                tunnel.setStateDir(filesDir.absolutePath)
 
                 // 1. Сессия без интерфейса. Ядро вернёт JSON с тем, что
                 //    нужно настроить.

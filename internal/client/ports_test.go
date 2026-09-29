@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -204,5 +206,88 @@ func TestConnectTimeoutCoversAllPorts(t *testing.T) {
 	}
 	if got := portDialer(t, "192.0.2.10:443", &portScript{}).ConnectTimeout(); got != 30*time.Second {
 		t.Fatalf("срок для одного порта изменился: %v", got)
+	}
+}
+
+// TestPortRememberedAcrossRestarts — удачный порт переживает перезапуск:
+// новый дозвонщик (новый запуск программы) начинает с него, а не бьётся
+// снова в закрытый первый порт.
+func TestPortRememberedAcrossRestarts(t *testing.T) {
+	mem := FilePortMemory(filepath.Join(t.TempDir(), "sub", PortsFile))
+	s := &portScript{silent: map[string]bool{"8443": true}}
+	cfg := testClientConfig()
+	cfg.Server = "192.0.2.10:8443,2053,2083"
+	cfg.ServerName = "example.test"
+
+	d1, err := NewDialer(cfg, Options{Ports: mem})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1.attempt = s.attempt
+	if _, err := d1.Dial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := mem.Port("192.0.2.10"); got != "2053" {
+		t.Fatalf("запомнен порт %q", got)
+	}
+
+	// «Перезапуск»: новый дозвонщик с той же памятью.
+	s.reset()
+	d2, err := NewDialer(cfg, Options{Ports: mem})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.attempt = s.attempt
+	if _, err := d2.Dial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.tried, ",") != "2053" {
+		t.Fatalf("после перезапуска попытки %v — начал не с запомненного порта", s.tried)
+	}
+
+	// Порты сервера сменились и запомненного в списке нет — с начала списка.
+	s.reset()
+	cfg2 := *cfg
+	cfg2.Server = "192.0.2.10:443,2087"
+	d3, _ := NewDialer(&cfg2, Options{Ports: mem})
+	d3.attempt = s.attempt
+	if _, err := d3.Dial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if s.tried[0] != "443" {
+		t.Fatalf("при чужом запомненном порте начал с %v", s.tried)
+	}
+
+	// Испорченный файл — не повод не подключаться.
+	bad := filepath.Join(t.TempDir(), PortsFile)
+	os.WriteFile(bad, []byte("{мусор"), 0o600)
+	if FilePortMemory(bad).Port("x") != "" {
+		t.Fatal("из испорченного файла что-то прочиталось")
+	}
+}
+
+// TestStallMovesToNextPort — сторож признал путь мёртвым: переподключение
+// начинается со следующего порта, а не с того, что только что умер.
+func TestStallMovesToNextPort(t *testing.T) {
+	s := &portScript{}
+	d := portDialer(t, "192.0.2.10:8443,2053,2083", s)
+	if _, err := d.Dial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	d.stall()
+	s.reset()
+	if _, err := d.Dial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.tried, ",") != "2053" {
+		t.Fatalf("после сбоя пути попытки %v", s.tried)
+	}
+	// И по кругу: после последнего — снова первый.
+	d.stall()
+	d.stall()
+	s.reset()
+	d.Dial(t.Context())
+	if s.tried[0] != "8443" {
+		t.Fatalf("круг не замкнулся: %v", s.tried)
 	}
 }

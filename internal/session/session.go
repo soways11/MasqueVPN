@@ -75,6 +75,23 @@ type Config struct {
 	// OnReconnect, если задан, сообщает о попытках переподключения
 	// (err == nil — успешно).
 	OnReconnect func(attempt int, err error)
+
+	// StallAfter — через сколько «мы шлём, а в ответ ничего» проверять, жив
+	// ли путь (0 — не следить). Работает только вместе с Reconnect.
+	//
+	// Зачем. Когда порт начинают резать посреди сессии, пакеты пропадают
+	// молча: ни ошибки, ни закрытия. QUIC заметит это только по таймауту
+	// простоя — десятки секунд, всё это время туннель мёртв. Здесь мы
+	// замечаем раньше: трафик уходит, а от сервера не приходит ничего —
+	// проверяем путь запросом (masque.Conn.Probe); не ответил — рвём
+	// соединение сами и переподключаемся.
+	StallAfter time.Duration
+	// ProbeTimeout — сколько ждать ответа на проверку; 0 — StallAfter.
+	ProbeTimeout time.Duration
+	// OnStall вызывается, когда путь признан мёртвым, — до переподключения.
+	// Клиент здесь помечает порт как подозрительный, чтобы переподключение
+	// начать со следующего.
+	OnStall func()
 }
 
 // Session — фасад с единым ReadPacket/WritePacket поверх сменяемых соединений.
@@ -95,6 +112,7 @@ type Session struct {
 	retired masque.Stats
 
 	lost    chan *masque.Conn // соединение, оборвавшееся не по нашей воле
+	stalls  atomic.Int64      // сколько раз сторож признал путь мёртвым
 	closed  bool              // под mu: после Close новые соединения не принимаются
 	dropped atomic.Uint64     // пакеты, потерянные, пока не было связи
 
@@ -140,7 +158,109 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 		s.wg.Add(1)
 		go s.autoRotate()
 	}
+	if cfg.Reconnect && cfg.StallAfter > 0 {
+		s.wg.Add(1)
+		go s.watchStall()
+	}
 	return s, nil
+}
+
+// Stalls — сколько раз путь признан мёртвым и соединение порвано сторожем.
+func (s *Session) Stalls() int { return int(s.stalls.Load()) }
+
+// received — настоящие пакеты туннеля от сервера (целые и куски).
+//
+// Маскировочные датаграммы (CoverIn) сюда сознательно не входят: сервер шлёт
+// их сам по себе, не глядя, доходит ли что-нибудь от клиента. Когда порт
+// режут только в сторону сервера — а режут чаще всего именно так, по порту
+// назначения, — паддинг продолжает приходить, и путь выглядел бы живым, хотя
+// ни один наш пакет до сервера не доходит. Так и было на стенде.
+func received(st masque.Stats) uint64 {
+	return st.PacketsIn + st.FragmentsIn
+}
+
+// watchStall — сторож пути (см. Config.StallAfter).
+//
+// Следит за двумя моментами: когда последний раз что-то пришло от сервера и
+// когда последний раз мы что-то отправили. Если мы продолжаем отправлять, а
+// от сервера тишина дольше StallAfter, — проверяем путь запросом. Ответ
+// пришёл — всё в порядке, сервер просто молчал (так бывает: односторонний
+// поток). Не пришёл — соединение мертво, рвём его, и дальше работает
+// обычное переподключение.
+//
+// Без отправки сторож ничего не делает: простаивающий туннель проверять
+// незачем, а проверка по расписанию была бы лишним трафиком и метрономом.
+func (s *Session) watchStall() {
+	defer s.wg.Done()
+	probeTimeout := s.cfg.ProbeTimeout
+	if probeTimeout <= 0 {
+		probeTimeout = s.cfg.StallAfter
+	}
+	tick := max(s.cfg.StallAfter/4, 50*time.Millisecond)
+	t := time.NewTicker(tick)
+	defer t.Stop()
+
+	var watched *masque.Conn
+	var lastIn, lastOut uint64
+	var inAt, outAt time.Time
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-t.C:
+		}
+		c := s.Current()
+		select {
+		case <-c.Done():
+			// Соединение уже закрыто (нами или сервером) — им занимается
+			// переподключение, проверять его незачем.
+			continue
+		default:
+		}
+		now := time.Now()
+		st := c.Stats()
+		if c != watched { // новое соединение (ротация, переподключение) — считаем заново
+			watched, lastIn, lastOut, inAt, outAt = c, received(st), st.PacketsOut, now, now
+			continue
+		}
+		if in := received(st); in != lastIn {
+			lastIn, inAt = in, now
+		}
+		if st.PacketsOut != lastOut {
+			lastOut, outAt = st.PacketsOut, now
+		}
+		if now.Sub(inAt) < s.cfg.StallAfter || !outAt.After(inAt) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		err := c.Probe(ctx)
+		cancel()
+		if errors.Is(err, masque.ErrSessionClosed) {
+			continue // закрылось, пока проверяли, — не наш случай
+		}
+		if err == nil || errors.Is(err, masque.ErrNoProber) {
+			// Путь жив (или проверить нечем): следующая проверка — не раньше,
+			// чем через StallAfter тишины.
+			inAt = time.Now()
+			continue
+		}
+		if s.Current() != c {
+			continue // пока проверяли, соединение уже сменилось
+		}
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		s.stalls.Add(1)
+		if s.cfg.OnStall != nil {
+			s.cfg.OnStall()
+		}
+		// Закрытие будит насос (ReadPacket вернёт ошибку), а он — цикл
+		// переподключения: дальше всё как при любом обрыве, с просьбой
+		// вернуть прежний адрес.
+		c.Close()
+	}
 }
 
 // Prefixes возвращает адреса текущего соединения.

@@ -242,11 +242,17 @@ func TestAuthOverUTLS(t *testing.T) {
 	}
 	c.Close()
 
-	// Без токена — 404, как у обычного веб-сервера.
+	// Без токена — 404, как у обычного веб-сервера без такого маршрута.
 	var re *masque.ResponseError
-	_, err = dial(t, e)
+	_, err = dial(t, e, func(cfg *Config) { cfg.Protocol = masque.ProtocolWebTransport })
 	if !errors.As(err, &re) || re.StatusCode != http.StatusNotFound {
 		t.Fatalf("без токена ожидался 404, получено: %v", err)
+	}
+	// С меткой connect-ip — 501, как на метку, которой WebTransport-сервер
+	// не знает (masque/probe.go).
+	_, err = dial(t, e, func(cfg *Config) { cfg.Protocol = masque.ProtocolConnectIP })
+	if !errors.As(err, &re) || re.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("connect-ip без токена: ожидался 501, получено: %v", err)
 	}
 }
 

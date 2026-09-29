@@ -73,6 +73,93 @@ func TestSiteHasNoDeadLinks(t *testing.T) {
 	}
 }
 
+// TestLegendsExplainProtocol — сайт рассказывает то же, что видно в
+// протоколе (см. legends.go). SETTINGS объявляют WebTransport — значит,
+// каждая легенда о сервисе, которому он нужен, и документация говорит, как
+// открыть сессию, какие у неё датаграммы и какие UDP-порты отвечают. Без
+// этого теста новая легенда про, скажем, хостинг блогов прошла бы все
+// остальные проверки — и противоречила бы SETTINGS того же домена.
+func TestLegendsExplainProtocol(t *testing.T) {
+	ports := []int{443, 8443, 2053, 2083}
+	for i := range legends {
+		lg := &legends[i]
+		t.Run(fmt.Sprintf("legend%d", i), func(t *testing.T) {
+			v := variantFor(fmt.Sprintf("seed-%d", i))
+			v.legend = lg
+			s, err := build(Options{Host: "quiet-river.io", UDPPorts: ports}, v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			home := string(bodyOf(t, get(t, s, http.MethodGet, "/", nil)))
+			docs := string(bodyOf(t, get(t, s, http.MethodGet, v.docsPath, nil)))
+
+			// Главная сама говорит, на чём сервис работает: до документации
+			// доходит не всякий.
+			if !strings.Contains(home, "WebTransport") {
+				t.Error("на главной ни слова о WebTransport, а SETTINGS его объявляют")
+			}
+			for _, must := range []string{
+				"new WebTransport(",           // как открыть сессию
+				"datagrams",                   // что идёт датаграммами
+				"<code>404</code>",            // что ответит незнакомый адрес сессии
+				"UDP port 443",                // основной порт
+				"8443, 2053 and 2083",         // запасные — ровно те, что отвечают
+				"keepalive",                   // почему соединение живёт часами
+				"refresh their configuration", // фоновые GET по тому же соединению
+				`id="wt-support"`,
+			} {
+				if !strings.Contains(docs, must) {
+					t.Errorf("в документации нет %q", must)
+				}
+			}
+			// Пример адреса сессии — из легенды, не путь туннеля.
+			if strings.Contains(docs, ".well-known") || strings.Contains(docs, "masque") {
+				t.Error("документация показывает путь туннеля")
+			}
+			// И на этот адрес сайт по GET отвечает своим 404, а не страницей.
+			if rsp := get(t, s, http.MethodGet, lg.wtPath+"x", nil); rsp.StatusCode != http.StatusNotFound {
+				t.Errorf("GET %sx: %d", lg.wtPath, rsp.StatusCode)
+			}
+			if lg.session == "" || lg.media == "" || !strings.HasPrefix(lg.wtPath, "/") || !strings.HasSuffix(lg.wtPath, "/") {
+				t.Errorf("легенда без сессии, медиа или пути: %+v", lg)
+			}
+		})
+	}
+}
+
+// TestSiteWithoutWebTransport — сервер с webtransport=false WebTransport не
+// объявляет, и сайт его не обещает: ни в описании, ни в карточках, ни в
+// примере. Один порт — и документация не выдумывает запасных.
+func TestSiteWithoutWebTransport(t *testing.T) {
+	for i := range legends {
+		v := variantFor(fmt.Sprintf("seed-%d", i))
+		v.legend = &legends[i]
+		s, err := build(Options{Host: "quiet-river.io", NoWebTransport: true, UDPPorts: []int{8443}}, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{"/", v.docsPath} {
+			body := string(bodyOf(t, get(t, s, http.MethodGet, p, nil)))
+			if strings.Contains(body, "WebTransport") {
+				t.Errorf("legend%d %s: обещан WebTransport, которого нет в SETTINGS", i, p)
+			}
+		}
+		docs := string(bodyOf(t, get(t, s, http.MethodGet, v.docsPath, nil)))
+		for _, must := range []string{"Extended CONNECT", "UDP port 8443", "no TCP fallback"} {
+			if !strings.Contains(docs, must) {
+				t.Errorf("legend%d: в документации нет %q", i, must)
+			}
+		}
+		if strings.Contains(docs, "alternate ports") {
+			t.Errorf("legend%d: запасные порты при одном порте", i)
+		}
+		// Исходная легенда не испорчена заменой.
+		if !strings.Contains(legends[i].tagline+legends[i].cards[0][1]+legends[i].cards[1][1]+legends[i].cards[2][1], "WebTransport") {
+			t.Fatalf("legend%d: замена задела общий массив легенд", i)
+		}
+	}
+}
+
 func checkNoDeadLinks(t *testing.T, s *Site, v variant) {
 	seen := map[string]bool{}
 	queue := []string{"/"}

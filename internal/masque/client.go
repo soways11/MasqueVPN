@@ -283,6 +283,9 @@ func openSession(ctx context.Context, qc *quic.Conn, cfg ClientConfig, closer fu
 	c.resumed = st.TLS.DidResume
 	c.used0RTT = st.Used0RTT
 	c.start()
+	c.SetProber(func(ctx context.Context) error {
+		return doCoverRequest(ctx, cc, authority, "/", probeBodyBytes)
+	})
 	if cfg.CoverBrowsing != nil {
 		startCoverBrowsing(c, cc, authority, cfg.CoverBrowsing)
 	}

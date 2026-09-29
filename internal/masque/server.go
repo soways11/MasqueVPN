@@ -171,13 +171,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rejectCONNECT(w, http.StatusNotImplemented)
 	case r.URL.Path != h.cfg.Path:
 		// Для приложения с WebTransport путь — обычный маршрут.
-		rejectCONNECT(w, http.StatusNotFound)
+		rejectStranger(w, r)
 	default:
 		id, device, ok := h.identify(r)
 		if !ok {
 			// Тот же ответ, что и у несуществующего маршрута: по нему нельзя
 			// узнать, что туннельный путь вообще существует.
-			rejectCONNECT(w, http.StatusNotFound)
+			rejectStranger(w, r)
 			return
 		}
 		h.serveTunnel(w, r, id, device)
@@ -240,7 +240,7 @@ func (h *Handler) serveTunnel(w http.ResponseWriter, r *http.Request, clientID, 
 	// сервера, а клиент получает ровно тот же ответ, что посторонний.
 	if h.cfg.Policy != nil {
 		if err := h.cfg.Policy.Admit(clientID, h.live.count(clientID)); err != nil {
-			rejectCONNECT(w, http.StatusNotFound)
+			rejectStranger(w, r)
 			return
 		}
 	}

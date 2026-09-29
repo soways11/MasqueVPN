@@ -84,6 +84,13 @@ func startCoverBrowsing(c *Conn, rt coverRequester, authority string, cb *CoverB
 	}()
 }
 
+// probeBodyBytes — сколько тела дочитывать при проверке связи (Conn.Probe):
+// сам ответ уже доказал, что путь жив, остальное — лишний трафик.
+const probeBodyBytes = 16 << 10
+
+// ProbeBodyBytes — то же для транспортов вне пакета (internal/utlsquic).
+const ProbeBodyBytes = probeBodyBytes
+
 func doCoverRequest(ctx context.Context, rt coverRequester, authority, path string, maxBody int64) error {
 	u, err := url.Parse("https://" + authority + path)
 	if err != nil {

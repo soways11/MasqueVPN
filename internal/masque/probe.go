@@ -25,6 +25,16 @@ import (
 // Последнее важнее всего: по ответу нельзя узнать, существует ли у сервера
 // туннельный путь. Различать «не тот путь» и «не тот токен» — значит отдать
 // проберу перебор пути.
+//
+// Метка connect-ip — особый случай. Снаружи мы WebTransport-сервер: это
+// объявляют SETTINGS, это рассказывает сайт. Такой сервер о connect-ip не
+// знает и отвечает на него, как на любую чужую метку, — 501. Мы же
+// принимаем connect-ip от своих клиентов (штатный режим RFC 9484), и
+// раньше постороннему на него доставался 404 — «метка знакома, не тот
+// маршрут». Одним запросом с connect-ip и одним с выдуманной меткой пробер
+// видел, что сервер понимает MASQUE, как бы ни выглядело всё остальное.
+// Теперь посторонний с connect-ip получает ровно ответ на чужую метку, а
+// различие появляется только с верным токеном, подделать который нельзя.
 
 // allowedMethods — заголовок Allow в ответах 405 и OPTIONS. Перечислено то,
 // что умеет сайт-прикрытие, и ничего больше: CONNECT в этом списке был бы
@@ -48,4 +58,16 @@ func rejectCONNECT(w http.ResponseWriter, code int) {
 		w.Header().Set("Allow", allowedMethods)
 	}
 	http.Error(w, http.StatusText(code), code)
+}
+
+// rejectStranger отвечает тому, кто не прошёл проверку: тем, что ответил бы
+// WebTransport-сервер без такого маршрута. На webtransport — 404, как на
+// любой несуществующий путь; на connect-ip — 501, как на любую метку,
+// которой WebTransport-сервер не знает (см. выше).
+func rejectStranger(w http.ResponseWriter, r *http.Request) {
+	if r.Proto == ProtocolConnectIP {
+		rejectCONNECT(w, http.StatusNotImplemented)
+		return
+	}
+	rejectCONNECT(w, http.StatusNotFound)
 }

@@ -62,6 +62,20 @@ type Options struct {
 	Built time.Time
 	// Now — источник текущего времени для /api/status.json (для тестов).
 	Now func() time.Time
+
+	// То, что видно в протоколе и о чём сайт обязан рассказывать то же
+	// самое (см. legends.go).
+
+	// UDPPorts — UDP-порты, на которых сервер отвечает по HTTP/3: основной
+	// и запасные. Пусто — только 443. Документация называет их в разделе
+	// о сети: сканер их всё равно найдёт, и сервис, который о своих портах
+	// молчит, выглядит страннее того, что их перечисляет.
+	UDPPorts []int
+	// NoWebTransport — сервер не объявляет SETTINGS WebTransport
+	// (webtransport=false в конфигурации). Тогда и сайт не обещает
+	// WebTransport, а говорит об Extended CONNECT и HTTP-датаграммах —
+	// тем, что в SETTINGS остаётся.
+	NoWebTransport bool
 }
 
 const (
@@ -106,6 +120,9 @@ func New(o Options) (*Site, error) {
 }
 
 func build(o Options, v variant) (*Site, error) {
+	if o.NoWebTransport {
+		v.legend = withoutWebTransport(v.legend)
+	}
 	if o.Description == "" {
 		o.Description = v.legend.tagline
 	}
@@ -122,6 +139,9 @@ func build(o Options, v variant) (*Site, error) {
 		Year: o.Built.Year(), Accent: v.accent, Word: v.word,
 		DocsPath: v.docsPath, DocsLabel: v.docsLabel, FeedPath: v.feedPath,
 		HomeLabel: v.homeLabel, FeedExample: v.legend.feedExample,
+		WebTransport: !o.NoWebTransport,
+		Port:         strconv.Itoa(o.UDPPorts[0]),
+		AltPorts:     joinPorts(o.UDPPorts[1:]),
 	}
 
 	s := &Site{
@@ -171,6 +191,23 @@ func build(o Options, v variant) (*Site, error) {
 	return s, nil
 }
 
+// withoutWebTransport — легенда для сервера, который WebTransport не
+// объявляет: обещать его на сайте значило бы разойтись с SETTINGS.
+// Остаётся то, что в SETTINGS есть, — HTTP/3 с датаграммами.
+func withoutWebTransport(lg *legend) *legend {
+	r := strings.NewReplacer("WebTransport", "HTTP/3").Replace
+	out := *lg
+	out.tagline = r(lg.tagline)
+	for i, c := range lg.cards {
+		out.cards[i] = [2]string{r(c[0]), r(c[1])}
+	}
+	out.docs = make([][2]string, len(lg.docs))
+	for i, d := range lg.docs {
+		out.docs[i] = [2]string{r(d[0]), r(d[1])}
+	}
+	return &out
+}
+
 // FeedPath — путь машиночитаемой сводки статуса у этой установки.
 func (s *Site) FeedPath() string { return s.feed }
 
@@ -191,6 +228,25 @@ func (o *Options) defaults() {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if len(o.UDPPorts) == 0 {
+		o.UDPPorts = []int{443}
+	}
+}
+
+// joinPorts — «8443, 2053 and 2083»: так перечисляют в тексте, а не в
+// конфигурации.
+func joinPorts(ports []int) string {
+	s := make([]string, len(ports))
+	for i, p := range ports {
+		s[i] = strconv.Itoa(p)
+	}
+	switch len(s) {
+	case 0:
+		return ""
+	case 1:
+		return s[0]
+	}
+	return strings.Join(s[:len(s)-1], ", ") + " and " + s[len(s)-1]
 }
 
 // titleFromHost делает из домена название сервиса: берётся регистрируемая
@@ -526,9 +582,13 @@ type pageData struct {
 	FeedPath    string
 	FeedExample string
 	HomeLabel   string
-	Year        int
-	Code        int
-	CodeText    string
+	// То, что видно в протоколе (см. Options.UDPPorts, NoWebTransport).
+	WebTransport bool
+	Port         string
+	AltPorts     string
+	Year         int
+	Code         int
+	CodeText     string
 }
 
 func renderPage(title, body string, d *pageData) ([]byte, error) {
@@ -600,11 +660,56 @@ const healthSection = `<h2>Health</h2>
 }</code></pre>
 `
 
-// docsBody — документация: разделы легенды, между ними — раздел про фид
-// статуса (его место тоже зависит от установки).
+// connectSection — как клиент открывает сессию. Пишется ровно то, что
+// увидит пробер: с WebTransport-SETTINGS — WebTransport, без них —
+// Extended CONNECT; на неизвестный адрес сессии — 404 (masque/probe.go).
+// Пример адреса — из легенды, не путь туннеля.
+func connectSection(lg *legend) string {
+	return `<h2>Connecting</h2>
+{{if .WebTransport}}<p>Each ` + lg.session + ` runs as a WebTransport session over HTTP/3. Your backend asks
+the API for a session URL; the URL carries a short-lived token and stops working when
+it expires. Unknown and expired session URLs answer <code>404</code>, like any other
+path that does not exist.</p>
+<pre><code>const session = new WebTransport("https://{{.Host}}` + lg.wtPath + `&lt;token&gt;");
+await session.ready;
+const frames = session.datagrams.readable.getReader();</code></pre>
+<p>` + lg.media + ` travel as datagrams: a packet that arrives too late is dropped
+rather than retransmitted, so a lossy network costs quality, not delay. Control
+messages use one bidirectional stream.</p>
+<p class="note" id="wt-support"></p>
+{{else}}<p>Each ` + lg.session + ` is opened with an Extended CONNECT request over HTTP/3 (RFC 9220) and uses
+HTTP datagrams (RFC 9297); the client libraries handle both. Your backend asks the API
+for a session URL; the URL carries a short-lived token, and unknown or expired session
+URLs answer <code>404</code>, like any other path that does not exist.</p>
+<p>` + lg.media + ` travel as datagrams: a packet that arrives too late is dropped
+rather than retransmitted, so a lossy network costs quality, not delay.</p>
+{{end}}`
+}
+
+// networkSection — что сервису нужно от сети. Объясняет то, что видно на
+// канале: UDP и несколько портов, долгую сессию, keepalive, фоновые
+// запросы по тому же соединению и переподключение, когда путь замолк.
+func networkSection(lg *legend) string {
+	return `<h2>Network requirements</h2>
+<p>Sessions run over QUIC on UDP port {{.Port}}.{{if .AltPorts}} Some networks block or throttle
+UDP {{.Port}}; clients then try the alternate ports {{.AltPorts}} in that order and
+remember the one that worked.{{else}} There is no TCP fallback for a ` + lg.session + `: if UDP
+{{.Port}} is blocked on your network, ask the administrator to allow it.{{end}}</p>
+<p>A ` + lg.session + ` keeps one connection open for as long as it lasts, often for hours.
+When there is nothing else to send, clients send a keepalive about every fifteen
+seconds, and they refresh their configuration over the same connection from time to
+time. If the path goes quiet for several seconds, the client reconnects on its own and
+resumes where it left off.</p>
+`
+}
+
+// docsBody — документация: сначала подключение, затем разделы легенды,
+// между ними — раздел про фид статуса (его место тоже зависит от
+// установки), в конце — требования к сети.
 func docsBody(v variant) string {
 	var b strings.Builder
 	b.WriteString("<h1>{{.DocsLabel}}</h1>\n<p class=\"lead\">" + v.legend.docsLead + "</p>\n")
+	b.WriteString(connectSection(v.legend))
 	for i, d := range v.legend.docs {
 		if i == v.healthPos {
 			b.WriteString(healthSection)
@@ -614,6 +719,7 @@ func docsBody(v variant) string {
 	if v.healthPos >= len(v.legend.docs) {
 		b.WriteString(healthSection)
 	}
+	b.WriteString(networkSection(v.legend))
 	b.WriteString("<p class=\"note\">Questions: <a href=\"mailto:{{.Contact}}\">{{.Contact}}</a>.</p>\n")
 	return b.String()
 }
@@ -680,6 +786,12 @@ pre{background:#1a212b}
 
 const scriptJS = `(function(){
   "use strict";
+  var wt=document.getElementById("wt-support");
+  if(wt){
+    wt.textContent=("WebTransport" in window)
+      ?"This browser supports WebTransport."
+      :"This browser does not support WebTransport yet: try a current version of Chrome, Edge or Firefox.";
+  }
   var tbody=document.querySelector("#components tbody");
   var summary=document.getElementById("summary");
   if(!tbody||!summary){return;}

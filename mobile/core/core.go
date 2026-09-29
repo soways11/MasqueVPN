@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -132,6 +133,8 @@ type Tunnel struct {
 
 	// deviceID — псевдоним этого телефона (см. SetDeviceID).
 	deviceID string
+	// stateDir — каталог приложения для служебных файлов (см. SetStateDir).
+	stateDir string
 	// meter считает скорость по нарастающим итогам; since — когда туннель
 	// заработал (для «сессии» на экране).
 	meter   *gui.Meter
@@ -162,6 +165,23 @@ func (t *Tunnel) SetDeviceID(id string) {
 	t.deviceID = strings.TrimSpace(id)
 	t.mu.Unlock()
 }
+
+// SetStateDir задаёт каталог, где ядро хранит служебное — сейчас это
+// удачный порт сервера (client.PortsFile). Вызывать до Connect; приложение
+// передаёт свой filesDir.
+//
+// Без каталога порт помнится до конца процесса: переподключения и новые
+// сессии начинают с удачного порта, а после перезапуска телефона — снова с
+// первого в адресе.
+func (t *Tunnel) SetStateDir(dir string) {
+	t.mu.Lock()
+	t.stateDir = strings.TrimSpace(dir)
+	t.mu.Unlock()
+}
+
+// processPorts — память портов на время жизни процесса, общая для всех
+// туннелей: служба VPN пересоздаёт Tunnel при каждом включении.
+var processPorts = client.MemPortMemory()
 
 // State — текущее состояние.
 func (t *Tunnel) State() string {
@@ -285,9 +305,12 @@ func (t *Tunnel) connect(configJSON string, p Protector) (string, error) {
 // псевдоним устройства.
 func (t *Tunnel) dialOptions(cfg *config.Client, p Protector, log *slog.Logger) (client.Options, error) {
 	t.mu.Lock()
-	device := t.deviceID
+	device, dir := t.deviceID, t.stateDir
 	t.mu.Unlock()
-	opt := client.Options{Logger: log, DeviceID: device}
+	opt := client.Options{Logger: log, DeviceID: device, Ports: processPorts}
+	if dir != "" {
+		opt.Ports = client.FilePortMemory(filepath.Join(dir, client.PortsFile))
+	}
 	if p != nil {
 		// Защита сокета — обязательна при полном туннеле: без неё пакеты
 		// самого туннеля уйдут в туннель. Ошибку здесь не проглатываем.

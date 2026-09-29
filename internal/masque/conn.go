@@ -113,6 +113,46 @@ type Conn struct {
 	maxUnknownCaps                                           int
 	limiter                                                  *rateLimiter
 	idleTimeout                                              time.Duration
+
+	// prober — проверка «сервер отвечает по этому соединению»: обычный GET к
+	// сайту-прикрытию по тому же QUIC-соединению (см. Probe). Задаёт
+	// транспорт, который умеет такие запросы; nil — проверять нечем.
+	proberMu sync.Mutex
+	prober   func(ctx context.Context) error
+}
+
+// ErrNoProber — транспорт не умеет проверять связь запросом (см. Probe).
+var ErrNoProber = errors.New("masque: проверка связи не поддерживается транспортом")
+
+// SetProber задаёт проверку связи. Вызывает транспорт после установления
+// сессии.
+func (c *Conn) SetProber(f func(ctx context.Context) error) {
+	c.proberMu.Lock()
+	c.prober = f
+	c.proberMu.Unlock()
+}
+
+// Probe проверяет, что сервер отвечает по этому соединению: выполняет обычный
+// GET к сайту-прикрытию тем же QUIC-соединением и ждёт ответа.
+//
+// Нужна там, где датаграммы перестали приходить и непонятно почему: то ли
+// сервер просто молчит (туннелю нечего отдавать), то ли путь мёртв (порт
+// начали резать посреди сессии, и пакеты пропадают молча). Датаграммы
+// ненадёжны и подтверждений не имеют, а запрос — имеет. Снаружи такой запрос
+// неотличим от прикрытия потоками (см. CoverBrowsing).
+func (c *Conn) Probe(ctx context.Context) error {
+	c.proberMu.Lock()
+	f := c.prober
+	c.proberMu.Unlock()
+	if f == nil {
+		return ErrNoProber
+	}
+	select {
+	case <-c.ctx.Done():
+		return ErrSessionClosed
+	default:
+	}
+	return f(ctx)
 }
 
 func newConn(str Stream, r role, closer func() error) *Conn {

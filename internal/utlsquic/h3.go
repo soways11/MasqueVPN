@@ -325,6 +325,12 @@ func (c *h3Conn) get(ctx context.Context, authority, path string, maxBody int64)
 		return err
 	}
 	defer str.Close()
+	// Срок из контекста — на сам поток: иначе при мёртвом пути чтение ответа
+	// ждало бы вечно, а проверка связи (masque.Conn.Probe) — это ровно тот
+	// случай, когда ответа может не быть.
+	if dl, ok := ctx.Deadline(); ok {
+		_ = str.SetDeadline(dl)
+	}
 
 	var headerBuf writeBuffer
 	enc := qpack.NewEncoder(&headerBuf)

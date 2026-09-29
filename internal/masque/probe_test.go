@@ -113,7 +113,11 @@ func TestProbeGetsServerLikeAnswers(t *testing.T) {
 		{"чужой маршрут", http.MethodConnect, ProtocolWebTransport, "/live/v1/", good, http.StatusNotFound},
 		{"чужой токен", http.MethodConnect, ProtocolWebTransport, DefaultPath, bad, http.StatusNotFound},
 		{"без токена", http.MethodConnect, ProtocolWebTransport, DefaultPath, nil, http.StatusNotFound},
-		{"connect-ip без токена", http.MethodConnect, ProtocolConnectIP, DefaultPath, bad, http.StatusNotFound},
+		// Снаружи мы WebTransport-сервер, а он о connect-ip не знает: без
+		// верного токена эта метка получает ответ на чужую метку.
+		{"connect-ip чужой токен", http.MethodConnect, ProtocolConnectIP, DefaultPath, bad, http.StatusNotImplemented},
+		{"connect-ip без токена", http.MethodConnect, ProtocolConnectIP, DefaultPath, nil, http.StatusNotImplemented},
+		{"connect-ip чужой маршрут", http.MethodConnect, ProtocolConnectIP, "/live/v1/", good, http.StatusNotImplemented},
 	}
 	replies := map[string]probeReply{}
 	for _, c := range cases {
@@ -143,13 +147,25 @@ func TestProbeGetsServerLikeAnswers(t *testing.T) {
 		t.Fatalf("чужой маршрут и чужой токен различимы:\n%+v\n%+v", a, b)
 	}
 
-	// И при всём этом свой клиент проходит.
-	c, err := env.dial(t, func(cfg *ClientConfig) {
-		cfg.Protocol = ProtocolWebTransport
-		cfg.Header = good
-	})
-	if err != nil {
-		t.Fatalf("свой клиент не прошёл: %v", err)
+	// И что сервер понимает MASQUE: connect-ip без верного токена
+	// неотличим от выдуманной метки — ни кодом, ни телом, ни заголовками.
+	for _, name := range []string{"connect-ip чужой токен", "connect-ip без токена", "connect-ip чужой маршрут"} {
+		a, b := replies["чужой :protocol"], replies[name]
+		if a.status != b.status || !bytes.Equal(a.body, b.body) ||
+			a.header.Get("Content-Type") != b.header.Get("Content-Type") {
+			t.Errorf("%s отличим от чужой метки:\n%+v\n%+v", name, a, b)
+		}
 	}
-	c.Close()
+
+	// И при всём этом свой клиент проходит — с любой из двух меток.
+	for _, proto := range []string{ProtocolWebTransport, ProtocolConnectIP} {
+		c, err := env.dial(t, func(cfg *ClientConfig) {
+			cfg.Protocol = proto
+			cfg.Header = good
+		})
+		if err != nil {
+			t.Fatalf("свой клиент (%s) не прошёл: %v", proto, err)
+		}
+		c.Close()
+	}
 }

@@ -39,7 +39,7 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 
 	// Метки сокета в Windows нет: трафик самого туннеля уводит мимо туннеля
 	// маршрут-исключение к адресу сервера (см. netsetup.FullTunnel).
-	dialer, err := client.NewDialer(cfg, client.Options{Logger: log})
+	dialer, err := client.NewDialer(cfg, client.Options{Logger: log, Ports: portMemory()})
 	if err != nil {
 		return err
 	}

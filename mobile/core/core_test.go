@@ -4,10 +4,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/soways11/masquevpn/internal/client"
 	"github.com/soways11/masquevpn/internal/config"
 )
 
@@ -315,5 +318,40 @@ func TestBootstrapResolvers(t *testing.T) {
 	}
 	if len(bootstrapResolvers(bare)) == 0 {
 		t.Fatal("без dns_cover список пуст — имя сервера на телефоне не разрешится")
+	}
+}
+
+// TestStateDirKeepsPorts — с каталогом приложения удачный порт помнится в
+// файле (переживает перезапуск телефона), без него — до конца процесса.
+func TestStateDirKeepsPorts(t *testing.T) {
+	cfg := parseCfg(t, "")
+
+	tn := NewTunnel()
+	opt, err := tn.dialOptions(cfg, &okProtector{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opt.Ports != processPorts {
+		t.Fatal("без каталога порт не помнится даже в процессе")
+	}
+
+	dir := t.TempDir()
+	tn.SetStateDir(" " + dir + " ")
+	opt, err = tn.dialOptions(cfg, &okProtector{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opt.Ports.Remember("vpn.example.com", "2053")
+	if _, err := os.Stat(filepath.Join(dir, client.PortsFile)); err != nil {
+		t.Fatalf("порт не записан в каталог приложения: %v", err)
+	}
+	tn2 := NewTunnel()
+	tn2.SetStateDir(dir)
+	again, err := tn2.dialOptions(cfg, &okProtector{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Ports.Port("vpn.example.com") != "2053" {
+		t.Fatal("после «перезапуска» порт не прочитан")
 	}
 }

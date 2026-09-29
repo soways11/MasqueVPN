@@ -87,12 +87,20 @@ func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Hand
 			host = s.Host
 		}
 		seed := siteSeed(s, log)
+		// Сайт рассказывает о том же, что видно в протоколе: какие UDP-порты
+		// отвечают и объявляется ли WebTransport (см. internal/site/legends.go).
+		ports, err := cfg.UDPPorts()
+		if err != nil {
+			return nil, err
+		}
 		h, err := site.New(site.Options{
-			Host:        host,
-			Title:       s.Title,
-			Description: s.Description,
-			Contact:     s.Contact,
-			Seed:        seed,
+			Host:           host,
+			Title:          s.Title,
+			Description:    s.Description,
+			Contact:        s.Contact,
+			Seed:           seed,
+			UDPPorts:       ports,
+			NoWebTransport: cfg.WebTransport != nil && !*cfg.WebTransport,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("fallback_site: %w", err)

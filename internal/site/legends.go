@@ -8,6 +8,24 @@ package site
 // установки (см. Options.Seed), а не доменом: иначе, зная код, по домену
 // можно было бы заранее вычислить страницу и сверить её побайтно.
 //
+// # Легенда обязана объяснять то, что видно в протоколе
+//
+// Сайт — не единственное, что посторонний видит у домена. Любой, кто
+// доведёт рукопожатие HTTP/3 до конца, прочтёт SETTINGS: Extended CONNECT,
+// HTTP-датаграммы и WebTransport. Кто смотрит на канал — увидит сессии по
+// многу часов, тяжёлый поток датаграмм в обе стороны (весь трафик туннеля)
+// и несколько UDP-портов. Убрать это нельзя: без Extended CONNECT и
+// датаграмм не работает сам CONNECT-IP.
+//
+// Прежние легенды (кэш сборок, вебхуки, ресайз картинок, сбор метрик) этому
+// противоречили: таким сервисам WebTransport незачем, и сессия на
+// гигабайты им не свойственна. Сайт, рассказывающий одно, при протоколе,
+// говорящем другое, — признак сильнее, чем отсутствие сайта. Поэтому все
+// легенды теперь — сервисы, для которых именно такой трафик и есть работа:
+// поток экрана или видео вниз, ввод или медиа вверх, датаграммами, часами.
+// Тест TestLegendsExplainProtocol следит, чтобы новая легенда не выпала из
+// этого ряда.
+//
 // Тексты — шаблоны html/template: в них доступны поля pageData
 // ({{.Word}}, {{.DocsPath}}, {{.FeedPath}}, {{.Contact}} и т.д.).
 type legend struct {
@@ -15,11 +33,21 @@ type legend struct {
 	tagline string
 	// words — как сервис называет себя в тексте («the platform»).
 	words []string
+	// session — как называется одна сессия («desktop session»): из общих
+	// разделов документации о подключении и о сети.
+	session string
+	// media — что идёт датаграммами, с заглавной буквы («Screen updates
+	// and input events»).
+	media string
+	// wtPath — начало адреса сессии в примере подключения. Настоящий путь
+	// туннеля здесь не показывается никогда: на этот пример без токена
+	// сервер ответит 404, как и написано в документации.
+	wtPath string
 	// cards — три блока на главной: заголовок и абзац.
 	cards [3][2]string
 	// docsLead — строка под заголовком документации.
 	docsLead string
-	// docs — разделы документации после общего раздела про статус.
+	// docs — разделы документации после общего раздела о подключении.
 	docs [][2]string
 	// components — что показывает страница статуса.
 	components [3]string
@@ -29,118 +57,134 @@ type legend struct {
 
 var legends = []legend{
 	{
-		tagline: "Realtime delivery for applications that cannot wait: one connection, ordered messages, predictable latency.",
+		tagline: "Cloud workstations in a browser tab: a full desktop with low latency and nothing to install.",
+		words:   []string{"platform", "service", "workspace"},
+		session: "desktop session",
+		media:   "Screen updates and input events",
+		wtPath:  "/session/",
+		cards: [3][2]string{
+			{"Nothing to install", `Desktops stream straight into a browser tab over WebTransport. The {{.Word}} sends screen updates one way and keyboard and mouse input the other.`},
+			{"Made for real networks", `Lost packets are skipped rather than waited for, so a flaky Wi-Fi costs sharpness, not responsiveness. Frame latency per region is on the <a href="/status">status page</a>.`},
+			{"A working day long", `Sessions stay connected for hours and resume after a network change without losing open windows. The details are in the <a href="{{.DocsPath}}">documentation</a>.`},
+		},
+		docsLead: "How a desktop gets from the {{.Word}} to your screen.",
+		docs: [][2]string{
+			{"Display", `<p>The encoder adapts to the available bandwidth every second: a static document
+costs almost nothing, full-screen video can take tens of megabits. Resolution follows
+the browser window, including high-DPI screens.</p>`},
+			{"Clipboard and files", `<p>Text and images copied on either side appear on the other. Files dropped onto the
+browser tab are uploaded to the desktop over the same connection.</p>`},
+		},
+		components:  [3]string{"Streaming", "Sessions", "API"},
+		feedExample: "Streaming",
+	},
+	{
+		tagline: "Live video with sub-second delay: ingest once and deliver to every viewer over WebTransport.",
+		words:   []string{"relay", "network", "platform"},
+		session: "playback session",
+		media:   "Video and audio frames",
+		wtPath:  "/watch/",
+		cards: [3][2]string{
+			{"Sub-second delay", `Viewers are less than a second behind the camera, close enough for auctions, sports and live Q&amp;A. The {{.Word}} forwards frames as datagrams the moment they arrive.`},
+			{"Every viewer, one origin", `Publish one stream and the {{.Word}} fans it out. Relay latency is published on the <a href="/status">status page</a>.`},
+			{"Standard players", `Playback uses WebTransport, available in current browsers; native apps use the same protocol. See the <a href="{{.DocsPath}}">docs</a>.`},
+		},
+		docsLead: "Publishing to the {{.Word}} and playing back from it.",
+		docs: [][2]string{
+			{"Publishing", `<p>Encoders publish over the same protocol as players, one session per stream.
+Renditions are produced at the edge, so upload only the highest quality you have.</p>`},
+			{"Quality switching", `<p>Players measure throughput continuously and move between renditions without a
+rebuffer. A late frame is dropped instead of stalling the picture.</p>`},
+			{"Recording", `<p>Every stream can be recorded; recordings are available for download for thirty
+days after the stream ends.</p>`},
+		},
+		components:  [3]string{"Ingest", "Relay", "Playback"},
+		feedExample: "Relay",
+	},
+	{
+		tagline: "Video meetings as an API: rooms, tracks and recording, delivered over WebTransport.",
+		words:   []string{"service", "platform", "media server"},
+		session: "call",
+		media:   "Audio and video",
+		wtPath:  "/rooms/",
+		cards: [3][2]string{
+			{"Rooms in one call", `Create a room from your backend, hand the join URL to your users, and the {{.Word}} does the rest: routing, simulcast and bandwidth estimation.`},
+			{"Media without the wait", `Audio and video travel as datagrams, so a lost packet is concealed instead of retransmitted. Media latency is on the <a href="/status">status page</a>.`},
+			{"Recording built in", `Record a room to a single file or to one track per participant. The API is in the <a href="{{.DocsPath}}">documentation</a>.`},
+		},
+		docsLead: "Rooms, participants and media on the {{.Word}}.",
+		docs: [][2]string{
+			{"Rooms", `<p>A room exists while anyone is in it. Participants publish tracks and subscribe to
+the tracks of others; the server forwards the best layer each subscriber can take.</p>`},
+			{"Bandwidth", `<p>A participant in a large call sends one stream and receives several. Expect a few
+megabits per second in each direction for HD video.</p>`},
+		},
+		components:  [3]string{"Media", "Signaling", "Recording"},
+		feedExample: "Media",
+	},
+	{
+		tagline: "Games streamed from the cloud to any screen: sixty frames a second, controller input in milliseconds.",
 		words:   []string{"platform", "service", "network"},
+		session: "game session",
+		media:   "Video frames and controller input",
+		wtPath:  "/play/",
 		cards: [3][2]string{
-			{"One connection", `Subscribers keep a single long-lived connection open; the {{.Word}} fans out every update over it instead of asking clients to poll.`},
-			{"Predictable latency", `Delivery is paced, so a burst upstream does not turn into a burst of jitter downstream. Current numbers are on the <a href="/status">status page</a>.`},
-			{"Small API", `One endpoint, JSON in and JSON out, no SDK required. The <a href="{{.DocsPath}}">documentation</a> fits on a single page.`},
+			{"Play anywhere", `Games run on our hardware and stream to a browser, a TV or a phone over WebTransport. The {{.Word}} needs no download and no install.`},
+			{"Input first", `Controller and keyboard input goes upstream as datagrams and reaches the game within a few milliseconds of the press. Round-trip times are on the <a href="/status">status page</a>.`},
+			{"Long sessions", `Play for hours on one connection; if the network drops, the session waits for you to come back. See the <a href="{{.DocsPath}}">docs</a>.`},
 		},
-		docsLead: "Everything the {{.Word}} exposes, on one page.",
+		docsLead: "What the {{.Word}} needs from your network and your client.",
 		docs: [][2]string{
-			{"Subscribing", `<p>Client libraries open one connection per process and keep it open. Reconnects are
-expected to be rare; when they happen, resume from the last sequence number you saw
-instead of replaying the whole stream.</p>`},
-			{"Limits", `<p>Per-connection throughput is shaped, and idle connections are closed after
-ten minutes of silence. Send a keepalive if you have nothing else to send.</p>`},
+			{"Video", `<p>Streams start at 720p and go up to 4K at 60 frames per second, which takes up to
+forty megabits per second. The encoder backs off within a frame when the link gets
+congested.</p>`},
+			{"Controllers", `<p>Gamepads are read through the browser Gamepad API. Touch controls are drawn on
+top of the stream on phones and tablets.</p>`},
 		},
-		components:  [3]string{"Edge", "Delivery", "API"},
-		feedExample: "Edge",
+		components:  [3]string{"Streaming", "Matchmaking", "Edge"},
+		feedExample: "Streaming",
 	},
 	{
-		tagline: "Metrics ingestion for small teams: push counters over HTTP, query them a second later.",
-		words:   []string{"collector", "service", "backend"},
+		tagline: "Interactive 3D in any browser: render in the cloud, stream the pixels, keep the models on our side.",
+		words:   []string{"platform", "service", "renderer"},
+		session: "viewing session",
+		media:   "Rendered frames and pointer input",
+		wtPath:  "/view/",
 		cards: [3][2]string{
-			{"Push, don't scrape", `Send batches of samples from wherever your code runs. The {{.Word}} accepts line protocol and JSON, and never asks you to open a port.`},
-			{"Fresh data", `Samples are queryable about a second after they arrive. Ingest lag is published on the <a href="/status">status page</a>.`},
-			{"Retention you choose", `Raw points are kept for thirty days, hourly rollups for two years. Details are in the <a href="{{.DocsPath}}">docs</a>.`},
+			{"Any device", `Heavy scenes render on cloud GPUs and stream to laptops and phones over WebTransport. The {{.Word}} sends frames down and pointer input up.`},
+			{"Models stay private", `Only pixels leave the data centre: source geometry is never downloaded to the viewer. Render times are on the <a href="/status">status page</a>.`},
+			{"Embeddable", `Drop a viewer into your product page with one script tag. Options are listed in the <a href="{{.DocsPath}}">documentation</a>.`},
 		},
-		docsLead: "How to send data to the {{.Word}} and read it back.",
+		docsLead: "Uploading scenes to the {{.Word}} and embedding the viewer.",
 		docs: [][2]string{
-			{"Sending samples", `<p>POST a batch of samples to your ingest endpoint with the token issued to your
-project. Batches of a few hundred points are the sweet spot; a single request may
-carry up to one megabyte.</p>`},
-			{"Querying", `<p>Queries take a metric name, a label filter and a time range, and return evenly
-spaced points. Ranges longer than a week are answered from hourly rollups.</p>`},
-			{"Tokens", `<p>Tokens are scoped to one project and can be write-only. Rotate them from the
-project settings; old tokens keep working for one hour.</p>`},
+			{"Scenes", `<p>Upload glTF or USD; scenes are prepared once and cached on every render node.
+Configurations such as colours and materials switch without reloading.</p>`},
+			{"Embedding", `<p>The viewer takes the size of its container. It keeps one connection open while
+visible and closes it after a minute in a background tab.</p>`},
 		},
-		components:  [3]string{"Ingest", "Query", "Rollups"},
-		feedExample: "Ingest",
+		components:  [3]string{"Render", "Streaming", "Assets"},
+		feedExample: "Render",
 	},
 	{
-		tagline: "A remote build cache that keeps CI fast without keeping it complicated.",
-		words:   []string{"cache", "service", "system"},
+		tagline: "Real phones in the cloud for app testing: stream the screen, send touches, collect the logs.",
+		words:   []string{"device cloud", "service", "lab"},
+		session: "device session",
+		media:   "Screen frames and touch input",
+		wtPath:  "/devices/",
 		cards: [3][2]string{
-			{"Content-addressed", `Artifacts are stored by hash, so identical outputs from different branches are uploaded once and served everywhere.`},
-			{"Close to your runners", `The {{.Word}} answers from the nearest region; hit latency per region is on the <a href="/status">status page</a>.`},
-			{"Works with your tools", `Speaks the plain HTTP cache protocol most build tools already support. Setup takes one line — see the <a href="{{.DocsPath}}">docs</a>.`},
+			{"Real hardware", `Tests run on physical phones and tablets, not emulators. The {{.Word}} streams each screen to your browser over WebTransport and sends your touches back.`},
+			{"Manual or automated", `Drive a device by hand from the browser or from your test runner; both use the same session. Device availability is on the <a href="/status">status page</a>.`},
+			{"Everything captured", `Screen recordings, device logs and network traces are kept for every session. See the <a href="{{.DocsPath}}">docs</a>.`},
 		},
-		docsLead: "Pointing your builds at the {{.Word}}.",
+		docsLead: "Reserving devices on the {{.Word}} and working with them.",
 		docs: [][2]string{
-			{"Configuration", `<p>Set the cache URL and a read-write token in your CI environment, and a
-read-only token on developer machines. Nothing else needs to change.</p>`},
-			{"Eviction", `<p>Entries that have not been read for fourteen days are evicted. Frequently used
-entries stay regardless of age.</p>`},
+			{"Reserving", `<p>Ask for a model and an OS version; the API returns a session URL as soon as a
+matching device is free. A reservation lasts until you release it.</p>`},
+			{"Installing apps", `<p>Upload an APK or IPA once and install it on any number of devices. Builds are
+kept for ninety days.</p>`},
 		},
-		components:  [3]string{"Cache", "Uploads", "API"},
-		feedExample: "Cache",
-	},
-	{
-		tagline: "Image resizing and delivery at the edge: upload once, request any size.",
-		words:   []string{"pipeline", "service", "platform"},
-		cards: [3][2]string{
-			{"Any size on request", `Ask for a width, a format and a quality in the URL; the {{.Word}} renders it once and caches the result.`},
-			{"Modern formats", `AVIF and WebP are served to browsers that accept them, with a JPEG fallback for everything else.`},
-			{"Plain URLs", `No SDK and no build step. The URL grammar is described in the <a href="{{.DocsPath}}">documentation</a>; render times are on the <a href="/status">status page</a>.`},
-		},
-		docsLead: "The URL grammar and everything around it.",
-		docs: [][2]string{
-			{"Transformations", `<p>Parameters go in the path before the file name: width, height, fit mode, format
-and quality. Unknown parameters are ignored rather than rejected.</p>`},
-			{"Origins", `<p>Originals are fetched from your storage bucket on first request and kept for
-thirty days. Purging an original purges every size derived from it.</p>`},
-		},
-		components:  [3]string{"Edge", "Transform", "Origin"},
-		feedExample: "Transform",
-	},
-	{
-		tagline: "Reliable webhooks: we receive, queue and retry, so your handlers can stay simple.",
-		words:   []string{"relay", "service", "gateway"},
-		cards: [3][2]string{
-			{"Never lose an event", `Incoming calls are acknowledged only after they are written to durable storage. The {{.Word}} replays anything your endpoint did not accept.`},
-			{"Retries with backoff", `Failed deliveries are retried for up to three days with exponential backoff. Queue depth is on the <a href="/status">status page</a>.`},
-			{"Signed payloads", `Every delivery carries a signature you can verify in a few lines. Examples are in the <a href="{{.DocsPath}}">docs</a>.`},
-		},
-		docsLead: "Receiving, queuing and delivering events through the {{.Word}}.",
-		docs: [][2]string{
-			{"Endpoints", `<p>Each source gets its own receiving URL. Point the sender at it, then register
-the endpoint that should get the events; filters by event type are optional.</p>`},
-			{"Verifying signatures", `<p>Compute an HMAC-SHA256 of the raw body with your endpoint secret and compare it
-with the signature header in constant time.</p>`},
-			{"Retries", `<p>Any response other than 2xx counts as a failure. After the last retry the event
-is kept for seven days and can be replayed by hand.</p>`},
-		},
-		components:  [3]string{"Receiver", "Queue", "Dispatcher"},
-		feedExample: "Queue",
-	},
-	{
-		tagline: "Offline-first sync for mobile apps: local writes, background merge, no conflicts to hand-roll.",
-		words:   []string{"sync engine", "service", "backend"},
-		cards: [3][2]string{
-			{"Local first", `Apps write to a local store and stay usable without a network. The {{.Word}} merges changes when the device comes back online.`},
-			{"Deterministic merges", `Concurrent edits are merged field by field in the same order on every device, so nobody has to write conflict screens.`},
-			{"Small footprint", `Only changed fields travel over the wire. Protocol details are in the <a href="{{.DocsPath}}">documentation</a>, sync lag on the <a href="/status">status page</a>.`},
-		},
-		docsLead: "How data moves between devices and the {{.Word}}.",
-		docs: [][2]string{
-			{"Collections", `<p>Data lives in collections of JSON documents. Each document carries a version
-vector; the client library maintains it for you.</p>`},
-			{"Authentication", `<p>Devices authenticate with short-lived tokens issued by your own backend, so user
-accounts stay where they already are.</p>`},
-		},
-		components:  [3]string{"Sync", "Storage", "Auth"},
-		feedExample: "Sync",
+		components:  [3]string{"Devices", "Streaming", "API"},
+		feedExample: "Devices",
 	},
 }
 

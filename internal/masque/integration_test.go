@@ -430,15 +430,26 @@ func TestNonConnectIPRequestsGoToFallback(t *testing.T) {
 	}
 
 	var re *ResponseError
+	wt := func(c *ClientConfig) { c.Protocol = ProtocolWebTransport }
 	// Неверный путь.
-	_, err = env.dial(t, func(c *ClientConfig) { c.Path = "/other/"; c.Header = http.Header{"Authorization": {"Bearer good"}} })
+	_, err = env.dial(t, wt, func(c *ClientConfig) { c.Path = "/other/"; c.Header = http.Header{"Authorization": {"Bearer good"}} })
 	if !errors.As(err, &re) || re.StatusCode != http.StatusNotFound {
 		t.Fatalf("wrong path: %v", err)
 	}
 	// Не авторизован — ответ такой же, как на неизвестный путь.
-	_, err = env.dial(t, func(c *ClientConfig) { c.Header = http.Header{"Authorization": {"Bearer bad"}} })
+	_, err = env.dial(t, wt, func(c *ClientConfig) { c.Header = http.Header{"Authorization": {"Bearer bad"}} })
 	if !errors.As(err, &re) || re.StatusCode != http.StatusNotFound {
 		t.Fatalf("unauthorized: %v", err)
+	}
+	// С меткой connect-ip и путь, и токен дают ответ на чужую метку.
+	for _, c := range []func(*ClientConfig){
+		func(c *ClientConfig) { c.Path = "/other/"; c.Header = http.Header{"Authorization": {"Bearer good"}} },
+		func(c *ClientConfig) { c.Header = http.Header{"Authorization": {"Bearer bad"}} },
+	} {
+		_, err = env.dial(t, c)
+		if !errors.As(err, &re) || re.StatusCode != http.StatusNotImplemented {
+			t.Fatalf("connect-ip постороннего: %v", err)
+		}
 	}
 	if env.pool.InUse() != 0 {
 		t.Fatal("address allocated for rejected request")
@@ -449,7 +460,9 @@ func TestNonConnectIPRequestsGoToFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
-	if authCalls.Load() != 2 { // неверный путь до Authorize не доходит
+	// Неверный путь до Authorize не доходит: проверок три — чужой токен с
+	// каждой из меток и свой.
+	if authCalls.Load() != 3 {
 		t.Fatalf("authorize called %d times", authCalls.Load())
 	}
 }
@@ -563,14 +576,21 @@ func TestHMACAuthEndToEnd(t *testing.T) {
 
 	// Повтор того же токена — отказ, неотличимый от неизвестного пути (404).
 	var re *ResponseError
-	_, err = env.dial(t, func(cfg *ClientConfig) { cfg.Header = cloneHeader(hdr) })
+	wt := func(cfg *ClientConfig) { cfg.Protocol = ProtocolWebTransport }
+	_, err = env.dial(t, wt, func(cfg *ClientConfig) { cfg.Header = cloneHeader(hdr) })
 	if !errors.As(err, &re) || re.StatusCode != http.StatusNotFound {
 		t.Fatalf("повтор токена: %v", err)
 	}
 	// Без токена — тот же 404.
-	_, err = env.dial(t)
+	_, err = env.dial(t, wt)
 	if !errors.As(err, &re) || re.StatusCode != http.StatusNotFound {
 		t.Fatalf("без токена: %v", err)
+	}
+	// С меткой connect-ip посторонний получает 501, как на любую метку,
+	// которой WebTransport-сервер не знает (см. probe.go).
+	_, err = env.dial(t, func(cfg *ClientConfig) { cfg.Header = cloneHeader(hdr) })
+	if !errors.As(err, &re) || re.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("повтор токена с connect-ip: %v", err)
 	}
 	if env.pool.InUse() != 0 {
 		t.Fatal("адрес выделен для неавторизованного запроса")

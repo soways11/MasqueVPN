@@ -58,6 +58,7 @@ public interface Events {
 
 public final class Tunnel {
     public native void   setDeviceID(String id);
+    public native void   setStateDir(String dir);
     public native String connect(String configJSON, Protector p1, Events ev) throws Exception;
     public native void   attach(long fd) throws Exception;
     public native void   rebind(long fd) throws Exception;
