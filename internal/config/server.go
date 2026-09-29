@@ -58,9 +58,13 @@ type Server struct {
 	Packing *Packing `json:"packing,omitempty"`
 
 	// ServerProfile — профиль транспортных параметров сервера (C1):
-	// "cloudflare" (по умолчанию) — снятый с живого сервера и встроенный в
-	// бинарник; "cdn" — прежняя эвристика, выдуманные числа; "stock" —
-	// умолчания quic-go, по которым сервер узнаётся сразу.
+	// "stock" (по умолчанию) — умолчания quic-go: это легенда «Caddy»,
+	// согласованная с ServerHello, который выдаёт stdlib crypto/tls (тот же,
+	// что у Caddy); "cloudflare" — снятый с живого www.cloudflare.com и
+	// встроенный профиль (транспортные параметры совпадут с Cloudflare, но
+	// ServerHello всё равно crypto/tls — рассогласование для активного
+	// пробера, см. claude/serverhello.md); "cdn" — прежняя эвристика,
+	// выдуманные числа.
 	ServerProfile string `json:"server_profile,omitempty"`
 	// ServerProfileFile — профиль, снятый с живого сервера утилитой
 	// fpserver; имеет приоритет над ServerProfile.
@@ -342,9 +346,20 @@ func (c *Server) Profile() (*fingerprint.ServerProfile, error) {
 		return &p, nil
 	}
 	switch c.ServerProfile {
-	case "", "cloudflare":
-		// Умолчание — профиль, снятый с живого сервера и встроенный в
-		// бинарник. Файл нужен только чтобы подставить свой.
+	case "", "stock":
+		// Умолчание — легенда «Caddy»: транспортные параметры quic-go, как у
+		// обычного сервера на quic-go/Caddy. Это согласовано с ServerHello,
+		// который на нашем сервере выдаёт stdlib crypto/tls (тот же стек, что
+		// у Caddy). Догонять Cloudflare мешает то, что часть параметров
+		// TLS1.3/QUIC (порядок расширений ServerHello, ack_delay, …) quic-go и
+		// crypto/tls наружу не отдают, — поэтому дешевле быть согласованным
+		// Caddy, чем рассогласованным Cloudflare (см. claude/serverhello.md).
+		return nil, nil
+	case "cloudflare":
+		// Снятый с живого www.cloudflare.com и встроенный профиль. Оставлен
+		// выбираемым: транспортные параметры совпадут с Cloudflare, но
+		// ServerHello всё равно crypto/tls, то есть для активного пробера это
+		// рассогласование слоёв.
 		p := fingerprint.Captured()
 		return &p, nil
 	case "cdn":
@@ -352,10 +367,8 @@ func (c *Server) Profile() (*fingerprint.ServerProfile, error) {
 		// для сравнения и на случай, если снятый профиль где-то помешает.
 		p := fingerprint.CDNLike()
 		return &p, nil
-	case "stock":
-		return nil, nil
 	}
-	return nil, fmt.Errorf("неизвестный server_profile %q (cloudflare, cdn, stock)", c.ServerProfile)
+	return nil, fmt.Errorf("неизвестный server_profile %q (stock, cloudflare, cdn)", c.ServerProfile)
 }
 
 // Pools возвращает сети клиентов.

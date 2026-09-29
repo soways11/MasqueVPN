@@ -259,7 +259,7 @@ func certificates(cfg *config.Server, log *slog.Logger) (quicConf, tcpConf *tls.
 func profileName(cfg *config.Server, p *fingerprint.ServerProfile) string {
 	switch {
 	case p == nil:
-		return "умолчания quic-go"
+		return "stock — умолчания quic-go (легенда Caddy)"
 	case cfg.ServerProfileFile != "":
 		return cfg.ServerProfileFile
 	default:

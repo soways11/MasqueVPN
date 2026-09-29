@@ -400,7 +400,7 @@ $ACME_BLOCK$CERT_BLOCK
   "nat": { "out_interface": "" },
   "shaping": "cloud-gaming-down",
   "packing": { "window": "300us" },
-  "server_profile": "cloudflare",
+  "server_profile": "stock",
 
   "fallback_site": {
     "contact": "hello@$DOMAIN"
@@ -420,16 +420,17 @@ EOF
 fi
 
 # ---------- профиль транспортных параметров ----------
-# В конфигурациях, написанных до 24.09.2026, стоит "cdn" — эвристика,
-# выдуманные числа порядков величин. Теперь в бинарник зашит профиль, снятый
-# с живого сервера (www.cloudflare.com). Без этой замены переустановка кода
-# ничего бы не поменяла: старый конфиг мы не перезаписываем, а значит и
-# профиль остался бы прежним.
-if grep -q '"server_profile"[[:space:]]*:[[:space:]]*"cdn"' /etc/masquevpn/server.json 2>/dev/null; then
+# Легенда «Caddy»: транспортные параметры quic-go, согласованные с ServerHello,
+# который на сервере выдаёт stdlib crypto/tls (тот же стек, что у Caddy). В
+# прежних конфигурациях стоит "cdn" (эвристика, выдуманные числа) или
+# "cloudflare" (снятый с www.cloudflare.com, но рассогласован с нашим crypto/tls
+# ServerHello — см. claude/serverhello.md). Без этой замены переустановка кода
+# профиль бы не тронула: старый конфиг мы не перезаписываем.
+if grep -qE '"server_profile"[[:space:]]*:[[:space:]]*"(cdn|cloudflare)"' /etc/masquevpn/server.json 2>/dev/null; then
     cp -p /etc/masquevpn/server.json "/etc/masquevpn/server.json.bak.$(date +%s)"
-    sed -i 's/"server_profile"[[:space:]]*:[[:space:]]*"cdn"/"server_profile": "cloudflare"/' \
+    sed -i -E 's/"server_profile"[[:space:]]*:[[:space:]]*"(cdn|cloudflare)"/"server_profile": "stock"/' \
         /etc/masquevpn/server.json
-    say "профиль сервера: эвристика cdn заменена на снятый с живого сервера"
+    say "профиль сервера: переключён на stock (легенда Caddy, согласована с ServerHello)"
     say "  (копия прежней конфигурации — /etc/masquevpn/server.json.bak.*)"
 fi
 
