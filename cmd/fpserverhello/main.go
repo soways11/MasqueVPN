@@ -123,12 +123,12 @@ func readVarint(b []byte) (uint64, int) {
 		if len(b) < 2 {
 			return 0, 0
 		}
-		return uint64(binary.BigEndian.Uint16(b)&0x3fff), 2
+		return uint64(binary.BigEndian.Uint16(b) & 0x3fff), 2
 	case 2:
 		if len(b) < 4 {
 			return 0, 0
 		}
-		return uint64(binary.BigEndian.Uint32(b)&0x3fffffff), 4
+		return uint64(binary.BigEndian.Uint32(b) & 0x3fffffff), 4
 	default:
 		if len(b) < 8 {
 			return 0, 0
@@ -236,10 +236,10 @@ func initialPacket(dcid, scid, token []byte, pn uint32, cryptoOff uint64, crypto
 }
 
 type parsed struct {
-	typ      byte // 0 Initial, 2 Handshake, 3 Retry
-	crypto   map[uint64][]byte
+	typ       byte // 0 Initial, 2 Handshake, 3 Retry
+	crypto    map[uint64][]byte
 	retrySCID []byte
-	retryTok []byte
+	retryTok  []byte
 	connClose bool
 }
 
@@ -398,19 +398,19 @@ func reassemble(m map[uint64][]byte) []byte {
 }
 
 var extNames = map[uint16]string{
-	0:     "server_name",
-	10:    "supported_groups",
-	13:    "signature_algorithms",
-	43:    "supported_versions",
-	51:    "key_share",
-	41:    "pre_shared_key",
-	42:    "early_data",
-	44:    "cookie",
-	0x39:  "quic_transport_parameters",
+	0:      "server_name",
+	10:     "supported_groups",
+	13:     "signature_algorithms",
+	43:     "supported_versions",
+	51:     "key_share",
+	41:     "pre_shared_key",
+	42:     "early_data",
+	44:     "cookie",
+	0x39:   "quic_transport_parameters",
 	0xff01: "renegotiation_info",
-	16:    "application_layer_protocol_negotiation",
-	5:     "status_request",
-	65037: "encrypted_client_hello",
+	16:     "application_layer_protocol_negotiation",
+	5:      "status_request",
+	65037:  "encrypted_client_hello",
 }
 
 var groupNames = map[uint16]string{
