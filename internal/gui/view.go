@@ -1,6 +1,9 @@
 package gui
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // State — состояние клиента, каким его видит человек.
 type State int
@@ -95,6 +98,8 @@ type View struct {
 	Autostart  bool
 	Profiles   []ProfileItem
 	ScrollY    int32
+	// PingingAll — идёт «Пинг всех»: кнопка показывает, что занята.
+	PingingAll bool
 
 	// AddNotice — что показать под формой добавления: подсказка о формате
 	// или причина, по которой вставленное не подошло.
@@ -125,6 +130,71 @@ type ProfileItem struct {
 	Name     string
 	Server   string
 	Selected bool
+
+	// Ping — итог последней проверки связи, RTT — её время (для PingOK).
+	Ping PingState
+	RTT  time.Duration
+}
+
+// PingState — что показывает кнопка пинга в строке профиля.
+type PingState int
+
+const (
+	PingNone PingState = iota // не проверяли: кнопка зовёт проверить
+	PingBusy                  // проверка идёт
+	PingOK                    // сервер ответил за RTT
+	PingFail                  // не ответил; причина — в журнале
+)
+
+// PingLabel — надпись на кнопке пинга.
+func (p ProfileItem) PingLabel() string {
+	switch p.Ping {
+	case PingBusy:
+		return "…"
+	case PingOK:
+		return FormatRTT(p.RTT)
+	case PingFail:
+		return "нет"
+	default:
+		return "пинг"
+	}
+}
+
+// PingColor — цвет надписи на кнопке пинга.
+func (p ProfileItem) PingColor() Color {
+	switch p.Ping {
+	case PingOK:
+		return ColorAccent
+	case PingFail:
+		return ColorDanger
+	default:
+		return ColorDim
+	}
+}
+
+// PingAllLabel — надпись «Пинг всех» (пока идёт — с многоточием).
+func (v View) PingAllLabel() string {
+	if v.PingingAll {
+		return "Пинг…"
+	}
+	return "Пинг всех"
+}
+
+// FormatRTT — время пинга для кнопки: «42 мс», от секунды — «1,2 с».
+// Ноль и меньше миллисекунды показываются как «<1 мс», а не «0 мс»: ноль
+// читается как «не мерили».
+func FormatRTT(d time.Duration) string {
+	ms := d.Milliseconds()
+	switch {
+	case ms < 1:
+		return "<1 мс"
+	case ms < 1000:
+		return fmt.Sprintf("%d мс", ms)
+	case ms < 10000:
+		return fmt.Sprintf("%d,%d с", ms/1000, ms%1000/100)
+	default:
+		return ">10 с"
+	}
 }
 
 // Session возвращает длительность сессии на момент now.

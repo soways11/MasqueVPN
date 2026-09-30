@@ -9,6 +9,7 @@ public abstract class Context {
     public abstract String getPackageName();
     public abstract android.content.pm.PackageManager getPackageManager();
     public abstract android.content.res.Resources getResources();
+    public abstract java.io.File getFilesDir();
     public abstract void startActivity(Intent i);
     public abstract ComponentName startService(Intent i);
     public abstract ComponentName startForegroundService(Intent i);

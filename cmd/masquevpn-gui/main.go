@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/soways11/masquevpn/internal/config"
 	"github.com/soways11/masquevpn/internal/gui"
 	"github.com/soways11/masquevpn/internal/guiraster"
+	"github.com/soways11/masquevpn/internal/version"
 )
 
 const (
@@ -80,6 +82,8 @@ type app struct {
 
 	meter    *gui.Meter
 	profiles *config.Profiles
+	// pings — итоги пинга профилей; проверки идут в фоне, окно лишь рисует.
+	pings *clientrun.PingBoard
 
 	mu       sync.Mutex
 	state    gui.State
@@ -105,6 +109,17 @@ type app struct {
 }
 
 func main() {
+	// Сторож (clientrun/watchdog_linux.go). Подняв аварийную блокировку,
+	// клиент запускает копию СЕБЯ с -watchdog <pid>, чтобы та сняла
+	// блокировку и вернула DNS, если окно убьют: правила nftables и
+	// подменённый resolv.conf переживают процесс. Разбирается ДО всего
+	// остального — шрифты, X11 и дисплей сторожу не нужны, права он наследует
+	// от родителя. Без этой ветки копия открыла бы второе окно и не прибралась.
+	if pid, ok := watchdogPID(); ok {
+		_, _ = clientrun.RunWatchdog(pid)
+		return
+	}
+
 	a := &app{meter: gui.NewMeter(graphPoints), scale: uiZoom, redraw: make(chan struct{}, 1), editIdx: -1}
 
 	fonts, err := guiraster.LoadFonts()
@@ -128,8 +143,10 @@ func main() {
 	}
 
 	a.loadProfiles()
+	a.pings = clientrun.NewPingBoard(a.invalidate, a.appendLog)
+	defer a.pings.Close()
 	a.winH = gui.LoadWindowPrefs(windowPrefsPath()).Height
-	a.appendLog("готов к подключению")
+	a.appendLog("masquevpn " + version.Version + " — готов к подключению")
 	if os.Geteuid() != 0 {
 		// Не выходим: окно полезно и без прав — посмотреть профили. Но
 		// сказать об этом надо сразу, а не при первой попытке подключиться.
@@ -152,6 +169,27 @@ func main() {
 	win.setSizeHints(w, int(float64(gui.MinWinH)*a.scale+0.5), int(float64(gui.MaxWinH)*a.scale+0.5))
 
 	a.run()
+}
+
+// watchdogPID разбирает служебный аргумент -watchdog <pid>. Своего разбора
+// флагов у окна нет, и заводить его ради одного служебного случая незачем
+// (так же сделано в окне для Windows).
+func watchdogPID() (int, bool) {
+	args := os.Args[1:]
+	for i, arg := range args {
+		if arg != "-"+clientrun.WatchdogFlag && arg != "--"+clientrun.WatchdogFlag {
+			continue
+		}
+		if i+1 >= len(args) {
+			return 0, false
+		}
+		pid, err := strconv.Atoi(args[i+1])
+		if err != nil || pid <= 0 {
+			return 0, false
+		}
+		return pid, true
+	}
+	return 0, false
 }
 
 // screenArg разбирает -screen ИМЯ.
@@ -363,6 +401,7 @@ func (a *app) view() gui.View {
 			Selected: strings.EqualFold(pr.Name, a.profiles.Current),
 		})
 	}
+	a.pings.Fill(&v)
 	return v
 }
 
@@ -580,7 +619,15 @@ func (a *app) activate(id gui.ItemID) {
 		a.confirmAdd()
 	case gui.ItemDeleteProfile:
 		a.deleteEdited()
+	case gui.ItemPingAll:
+		a.pings.PingAll(a.profiles.List)
 	default:
+		if i, ok := gui.ProfilePingIndex(id); ok {
+			if i < len(a.profiles.List) {
+				a.pings.Ping(a.profiles.List[i])
+			}
+			return
+		}
 		if i, ok := gui.ProfileIndex(id); ok {
 			a.selectProfile(i)
 			return

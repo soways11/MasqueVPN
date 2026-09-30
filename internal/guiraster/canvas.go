@@ -26,7 +26,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"math"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
@@ -390,7 +389,3 @@ func max32(a, b int32) int32 {
 	}
 	return b
 }
-
-// round округляет к ближайшему целому — нужен в паре мест, где считать
-// через math.Round дороже читается.
-func round(v float64) int { return int(math.Floor(v + 0.5)) }

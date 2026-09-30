@@ -39,6 +39,11 @@
     <string name="settings">Настройки</string>
     <string name="back">Назад</string>
     <string name="profile_menu">Действия с профилем</string>
+    <string name="ping_one">Проверить связь с сервером</string>
+    <string name="ping_idle">пинг</string>
+    <string name="ping_busy">…</string>
+    <string name="ping_all">Пинг всех</string>
+    <string name="ping_all_busy">Пинг…</string>
 
     <string name="log">Журнал</string>
     <string name="log_empty">пусто</string>

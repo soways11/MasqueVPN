@@ -1,6 +1,9 @@
 package android.view;
 public class View {
     public static final int VISIBLE = 0, INVISIBLE = 4, GONE = 8;
+    public static final int FOCUS_DOWN = 130;
+    public boolean post(Runnable action) { return true; }
+    public boolean canScrollVertically(int direction) { return false; }
     public interface OnClickListener { void onClick(View v); }
     public void setOnClickListener(OnClickListener l) {}
     public int getVisibility() { return 0; }

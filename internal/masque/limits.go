@@ -117,13 +117,6 @@ func (s *sessionCounter) acquire(ip string, l *Limits) (release func(), ok bool)
 	}, true
 }
 
-// stats возвращает текущие счётчики (для тестов и диагностики).
-func (s *sessionCounter) stats() (total, ips int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.total, len(s.perIP)
-}
-
 // clientIP выделяет адрес клиента из запроса. Порт отбрасывается: лимит
 // осмысленно считать по адресу, а не по каждому эфемерному порту.
 func clientIP(r *http.Request) string {

@@ -164,10 +164,13 @@ func routeReplace(link netlink.Link, p netip.Prefix) error {
 	})
 }
 
-// KillSwitchOff — заглушка: аварийное отключение реализовано только на
-// Windows (WFP). На Linux ту же роль играет постоянный набор правил, который
-// здесь пока не делается, поэтому снимать нечего.
-func KillSwitchOff() error { return nil }
+// KillSwitchOff снимает аварийную блокировку (nftables), если она осталась.
+// Оставлено для совместимости с прежним именем команды; -cleanup зовёт полную
+// уборку (Cleanup), которая делает то же и вдобавок восстанавливает DNS.
+func KillSwitchOff() error {
+	_, err := removeKillSwitchTable()
+	return err
+}
 
 // CleanupReport — см. реализацию для Windows.
 type CleanupReport struct {
@@ -179,13 +182,20 @@ type CleanupReport struct {
 	DNS bool
 }
 
-func (r CleanupReport) Empty() bool { return !r.DNS }
+func (r CleanupReport) Empty() bool { return !r.DNS && !r.KillSwitch }
 
 func (r CleanupReport) String() string {
 	if r.Empty() {
 		return "следов прошлого запуска нет"
 	}
-	return "убрано: DNS восстановлен (" + ResolvConf + ")"
+	switch {
+	case r.KillSwitch && r.DNS:
+		return "убрано: аварийная блокировка снята и DNS восстановлен (" + ResolvConf + ")"
+	case r.KillSwitch:
+		return "убрано: аварийная блокировка снята"
+	default:
+		return "убрано: DNS восстановлен (" + ResolvConf + ")"
+	}
 }
 
 // Cleanup убирает то, что на Linux переживает упавший клиент.
@@ -201,17 +211,28 @@ func (r CleanupReport) String() string {
 // файл уже не наш (систему с тех пор перенастроили), вернуть копию значило
 // бы затереть настройку, сделанную после. Об этом — ошибкой, руками.
 func Cleanup() (CleanupReport, error) {
+	var rep CleanupReport
+
+	// Сначала аварийная блокировка: это самое опасное, что переживает клиента
+	// (машина без сети), и снять её надо даже если с DNS что-то не так.
+	if removed, err := removeKillSwitchTable(); err != nil {
+		return rep, fmt.Errorf("netsetup: снятие аварийной блокировки: %w", err)
+	} else if removed {
+		rep.KillSwitch = true
+	}
+
 	backup := existingBackup()
 	if backup == "" {
-		return CleanupReport{}, nil // клиент вышел штатно или не запускался
+		return rep, nil // подменённого DNS нет: клиент вышел штатно или не запускался
 	}
 	if b, err := os.ReadFile(ResolvConf); err == nil && !ownResolvConf(b) {
-		return CleanupReport{}, fmt.Errorf("netsetup: рядом с %s лежит %s, но сам %s уже не от клиента — "+
+		return rep, fmt.Errorf("netsetup: рядом с %s лежит %s, но сам %s уже не от клиента — "+
 			"не трогаю, чтобы не затереть более новую настройку; сравните файлы и уберите лишний руками",
 			ResolvConf, backup, ResolvConf)
 	}
 	if err := os.Rename(backup, ResolvConf); err != nil {
-		return CleanupReport{}, fmt.Errorf("netsetup: восстановление %s: %w", ResolvConf, err)
+		return rep, fmt.Errorf("netsetup: восстановление %s: %w", ResolvConf, err)
 	}
-	return CleanupReport{DNS: true}, nil
+	rep.DNS = true
+	return rep, nil
 }

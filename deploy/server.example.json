@@ -16,7 +16,7 @@
   "nat": { "out_interface": "" },
   "shaping": "cloud-gaming-down",
   "packing": { "window": "300us" },
-  "server_profile": "cloudflare",
+  "server_profile": "stock",
   "fallback_proxy": "http://127.0.0.1:8080",
   "fallback_site": {
     "contact": "hello@example.com"

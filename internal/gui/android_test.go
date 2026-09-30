@@ -3,6 +3,7 @@ package gui
 import (
 	"encoding/xml"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -108,5 +109,38 @@ func TestAndroidTextSizes(t *testing.T) {
 	if !(sizes["text_label"] < sizes["text_row"] && sizes["text_row"] < sizes["text_title"]) {
 		t.Errorf("порядок кеглей нарушен: метка %v, строка %v, заголовок %v",
 			sizes["text_label"], sizes["text_row"], sizes["text_title"])
+	}
+}
+
+// TestAndroidPingPill — кнопка пинга на телефоне та же, что в окне: видимая
+// высота PingPillH (44dp нажатия минус отступы фона), рамки тех же цветов,
+// что рисует paintPingPill.
+func TestAndroidPingPill(t *testing.T) {
+	dir := filepath.Join("..", "..", "mobile", "android", "app", "src", "main", "res", "drawable")
+	for name, stroke := range map[string]string{
+		"bg_ping.xml":      "@color/border_dim",
+		"bg_ping_ok.xml":   "@color/accent_dim",
+		"bg_ping_fail.xml": "@color/danger_line",
+	} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(raw)
+		inset := fmt.Sprintf(`android:insetTop="%ddp" android:insetBottom="%ddp"`, (44-PingPillH)/2, (44-PingPillH)/2)
+		if strings.Count(s, inset) != 2 {
+			t.Errorf("%s: видимая высота не PingPillH (%d): нужны отступы %q", name, PingPillH, inset)
+		}
+		if strings.Count(s, `android:color="`+stroke+`"`) != 2 {
+			t.Errorf("%s: рамка не %s", name, stroke)
+		}
+	}
+	// Цвета рамок совпадают с окном.
+	colors := map[string]Color{}
+	for _, c := range AndroidPalette {
+		colors[c.Name] = c.Color
+	}
+	if colors["danger_line"] != ColorDanger.Darken(0.45) || colors["accent_dim"] != ColorAccentDim || colors["border_dim"] != ColorBorderDim {
+		t.Error("цвета рамок кнопки пинга разошлись с paintPingPill")
 	}
 }

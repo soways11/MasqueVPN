@@ -126,4 +126,4 @@ Remove-Variable pass, b64
 
 Write-Host ""
 Write-Host "готово: три секрета записаны. Пересобрать релиз:"
-Write-Host "  git tag -f v0.3.0; git push origin v0.3.0 --force"
+Write-Host "  git tag -f v1.0.0; git push origin v1.0.0 --force"

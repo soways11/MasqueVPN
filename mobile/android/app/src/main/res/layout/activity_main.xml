@@ -63,11 +63,16 @@
                 android:src="@drawable/ic_sliders" />
         </LinearLayout>
 
-        <!-- Состояние строкой: точка, надпись, время сессии справа. -->
+        <!--
+            Состояние строкой: точка, надпись, время сессии справа. Отступы
+            этого экрана — из MainLayout (internal/gui/layout.go): от кнопок
+            шапки до строки состояния 17, от неё до кнопки 12, после
+            счётчиков 18 до «Профилей»; точка — 8 до надписи.
+        -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="26dp"
+            android:layout_marginTop="16dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -81,7 +86,7 @@
                 android:id="@+id/status"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
+                android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:text="@string/state_off"
                 android:textAppearance="@style/TextAppearance.Masque.Label" />
@@ -94,11 +99,12 @@
                 tools:text="04:12" />
         </LinearLayout>
 
-        <!-- Главная кнопка: надпись по центру, стрелка у правого края. -->
+        <!-- Главная кнопка: надпись по центру, стрелка у правого края: в окне
+             её край в 17 от края кнопки (13dp отступа + 4.5 поля рисунка). -->
         <FrameLayout
             android:id="@+id/connect"
             style="@style/Masque.PrimaryButton"
-            android:layout_marginTop="14dp"
+            android:layout_marginTop="12dp"
             android:contentDescription="@string/connect">
 
             <TextView
@@ -114,7 +120,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center_vertical|end"
-                android:layout_marginEnd="20dp"
+                android:layout_marginEnd="13dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_arrow_right" />
         </FrameLayout>
@@ -293,7 +299,7 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="18dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -305,13 +311,37 @@
             <TextView
                 style="@style/Masque.SectionLabel"
                 android:text="@string/profiles" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <!--
+                «Пинг всех» — справа от метки, как в окне (Main.PingAll).
+                Поля расширяют область нажатия, а отрицательные отступы
+                возвращают строке высоту одной метки: иначе список профилей
+                уехал бы вниз относительно окна.
+            -->
+            <TextView
+                android:id="@+id/ping_all"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="-10dp"
+                android:layout_marginBottom="-10dp"
+                android:paddingStart="16dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:text="@string/ping_all"
+                android:textAppearance="@style/TextAppearance.Masque.Label"
+                android:visibility="gone" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/profiles"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="10dp"
             android:orientation="vertical" />
 
         <!-- Пусто: подсказка, откуда берётся доступ. -->
@@ -363,11 +393,14 @@
                     android:textAppearance="@style/TextAppearance.Masque.Small" />
             </LinearLayout>
 
+            <!-- Стрелка серая, как в окне (paintLogRow, ColorDim): сам рисунок
+                 тёмный — он для залитой главной кнопки. -->
             <ImageView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:importantForAccessibility="no"
-                android:src="@drawable/ic_arrow_right" />
+                android:src="@drawable/ic_arrow_right"
+                android:tint="@color/dim" />
         </LinearLayout>
 
         <!-- Распорка: подпись прижата к низу, если экран длиннее содержимого. -->

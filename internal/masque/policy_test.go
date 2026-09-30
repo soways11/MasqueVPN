@@ -209,6 +209,16 @@ func TestPolicyAccountsTraffic(t *testing.T) {
 	if err := waitAddr(t, c); err != nil {
 		t.Fatal(err)
 	}
+	// Адрес и маршруты приходят разными капсулами: дождавшись адреса, можно
+	// успеть отправить пакет раньше маршрутов, и его отвергнет собственная
+	// проверка клиента (ErrPacketRejected). Под нагрузкой (-race, весь
+	// набор разом) так и случалось.
+	for deadline := time.Now().Add(3 * time.Second); len(c.Routes()) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("маршруты от сервера не пришли")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	src := c.AssignedPrefixes()[0].Addr()
 
 	const packets = 20

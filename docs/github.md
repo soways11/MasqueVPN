@@ -34,7 +34,7 @@ gh repo create masquevpn --private --source . --push
 | workflow | когда | что |
 |---|---|---|
 | CI | каждый push в main и pull request | gitleaks, gofmt, vet (Linux и Windows), тесты, race, сквозной стенд под root, тесты и сборка на Windows, проверки Android и отладочный APK |
-| Release | тег `v*` (`git tag v0.3.0; git push --tags`) | установщик Windows, два `.deb`, пакет для VPS, подписанный APK, `SHA256SUMS` — всё в черновик релиза |
+| Release | тег `v*` (`git tag v1.0.0; git push --tags`) | установщик Windows, два `.deb`, пакет для VPS, подписанный APK, `SHA256SUMS` — всё в черновик релиза |
 
 Первый прогон на Windows — первый раз, когда тесты идут на настоящей
 Windows (раньше — кросс-компиляция и Wine): если там что-то красное,

@@ -30,6 +30,7 @@ import android.widget.Toast
 import core.Core
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.Executors
 
 /**
  * Главный экран — тот же, что в окнах Windows и Linux: состояние, кнопка,
@@ -55,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var bytesOut: TextView
     private lateinit var sessionTotal: TextView
     private lateinit var profilesBox: LinearLayout
+    private lateinit var pingAll: TextView
     private lateinit var empty: View
     private lateinit var logSummary: TextView
 
@@ -86,6 +88,7 @@ class MainActivity : Activity() {
         bytesOut = findViewById(R.id.bytes_out)
         sessionTotal = findViewById(R.id.session_total)
         profilesBox = findViewById(R.id.profiles)
+        pingAll = findViewById(R.id.ping_all)
         empty = findViewById(R.id.empty)
         logSummary = findViewById(R.id.log_summary)
 
@@ -94,6 +97,7 @@ class MainActivity : Activity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
         empty.setOnClickListener { openAdd(null) }
+        pingAll.setOnClickListener { pingEveryone() }
         connect.setOnClickListener { onConnectClicked() }
         findViewById<View>(R.id.log_row).setOnClickListener {
             startActivity(Intent(this, LogActivity::class.java))
@@ -212,16 +216,23 @@ class MainActivity : Activity() {
 
     private fun renderProfiles() {
         val list = Store.profiles(this).listJSON()
-        if (list == shownProfiles) return // перестраивать строки каждую секунду незачем
-        shownProfiles = list
+        // Строки перестраиваются, только когда поменялся список или итог
+        // пинга: каждую секунду незачем.
+        val key = list + "|" + pingVersion
+        if (key == shownProfiles) return
+        shownProfiles = key
 
         profilesBox.removeAllViews()
         val rows = JSONArray(list)
         empty.visibility = if (rows.length() == 0) View.VISIBLE else View.GONE
+        pingAll.visibility = if (rows.length() == 0) View.GONE else View.VISIBLE
+        pingAll.setText(if (pingAllKeys.isEmpty()) R.string.ping_all else R.string.ping_all_busy)
+        pingAll.isEnabled = pingAllKeys.isEmpty()
         val inflater = LayoutInflater.from(this)
         for (i in 0 until rows.length()) {
             val r = rows.getJSONObject(i)
             val name = r.getString("name")
+            val server = r.optString("server")
             val current = r.optBoolean("current")
             val row = inflater.inflate(R.layout.item_profile, profilesBox, false)
             row.findViewById<TextView>(R.id.name).apply {
@@ -229,13 +240,111 @@ class MainActivity : Activity() {
                 setTextColor(getColor(if (current) R.color.accent else R.color.text))
             }
             row.findViewById<TextView>(R.id.server).text = r.optString("host")
-            row.findViewById<View>(R.id.selected).visibility =
-                if (current) View.VISIBLE else View.INVISIBLE
+            val ping = row.findViewById<TextView>(R.id.ping)
+            showPing(ping, pings[pingKey(name, server)])
+            ping.setOnClickListener { pingOne(name, server) }
             row.setOnClickListener { select(name) }
             val menu = row.findViewById<View>(R.id.menu)
             menu.setOnClickListener { showProfileMenu(menu, name, current) }
             profilesBox.addView(row)
         }
+    }
+
+    // ---------- пинг ----------
+
+    /** Кнопка пинга: надпись, цвет и рамка — как paintPingPill в окне. */
+    private fun showPing(v: TextView, m: PingMark?) {
+        when {
+            m == null -> {
+                v.setText(R.string.ping_idle)
+                v.setTextColor(getColor(R.color.dim))
+                v.setBackgroundResource(R.drawable.bg_ping)
+            }
+            m.busy -> {
+                v.setText(R.string.ping_busy)
+                v.setTextColor(getColor(R.color.dim))
+                v.setBackgroundResource(R.drawable.bg_ping)
+            }
+            m.ok -> {
+                v.text = m.text
+                v.setTextColor(getColor(R.color.accent))
+                v.setBackgroundResource(R.drawable.bg_ping_ok)
+            }
+            else -> {
+                v.text = m.text
+                v.setTextColor(getColor(R.color.danger))
+                v.setBackgroundResource(R.drawable.bg_ping_fail)
+            }
+        }
+    }
+
+    /**
+     * Проверка профиля: ядро поднимает сессию и делает через неё HTTP GET
+     * на example.com (Core.ping). Блокирует до ответа, поэтому
+     * зовётся из фонового потока; итог приходит обратно в поток экрана.
+     * Возвращает false, если проверка уже идёт или профиля нет.
+     */
+    private fun pingOne(name: String, server: String): Boolean {
+        val key = pingKey(name, server)
+        if (pings[key]?.busy == true) return false
+        val cfg = Store.profiles(this).configFor(name)
+        if (cfg.isEmpty()) return false
+        // Резолверы системы — как при подключении: своего DNS у Go на
+        // Android нет, и без них имя сервера не разрешится.
+        val json = Store.withSystemResolvers(this, cfg)
+        // Пинг поднимает свою сессию под псевдонимом телефона + «/ping»:
+        // живую сессию того же профиля он не трогает.
+        val device = Store.deviceId(this)
+        pings[key] = PingMark(busy = true, ok = false, text = "")
+        pingVersion++
+        renderProfiles()
+        pinger.execute {
+            val res = try {
+                JSONObject(Core.ping(json, device))
+            } catch (e: Exception) {
+                JSONObject().put("ok", false).put("text", "нет").put("error", e.message ?: e.toString())
+            }
+            ui.post { pingDone(name, key, res) }
+        }
+        return true
+    }
+
+    private fun pingDone(name: String, key: String, res: JSONObject) {
+        val ok = res.optBoolean("ok")
+        val text = res.optString("text")
+        pings[key] = PingMark(busy = false, ok = ok, text = text)
+        if (ok) {
+            MasqueService.note(
+                "пинг $name: $text — GET ${res.optString("target")} через туннель, " +
+                    "${res.optString("status")} (порт ${res.optString("port")})"
+            )
+        } else {
+            MasqueService.note("пинг $name: нет ответа — ${res.optString("error")}")
+        }
+        if (pingAllKeys.remove(key)) {
+            if (ok) pingAllOk++
+            if (pingAllKeys.isEmpty()) MasqueService.note("пинг всех: ответили $pingAllOk из $pingAllTotal")
+        }
+        pingVersion++
+        renderProfiles()
+    }
+
+    /** «Пинг всех»: каждый профиль, не больше PING_PARALLEL разом (пул). */
+    private fun pingEveryone() {
+        if (pingAllKeys.isNotEmpty()) return
+        val rows = JSONArray(Store.profiles(this).listJSON())
+        pingAllOk = 0
+        for (i in 0 until rows.length()) {
+            val r = rows.getJSONObject(i)
+            val name = r.getString("name")
+            val server = r.optString("server")
+            // Уже шедшие отдельно проверки в итог «всех» не входят.
+            if (pingOne(name, server)) pingAllKeys.add(pingKey(name, server))
+        }
+        pingAllTotal = pingAllKeys.size
+        if (pingAllTotal > 0) MasqueService.note("пинг всех профилей: $pingAllTotal")
+        pingVersion++
+        renderProfiles()
     }
 
     private fun select(name: String) {
@@ -441,7 +550,26 @@ class MainActivity : Activity() {
     private fun toast(res: Int) = Toast.makeText(this, res, Toast.LENGTH_SHORT).show()
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_LONG).show()
 
+    /** Итог пинга профиля для кнопки. */
+    private data class PingMark(val busy: Boolean, val ok: Boolean, val text: String)
+
     companion object {
+        // Итоги пинга живут дольше экрана: повернули телефон или сходили в
+        // настройки — время не пропадает. Трогаются только из потока экрана.
+        // Ключ — имя и адрес: поправили адрес — старое время уже не про него.
+        private val pings = HashMap<String, PingMark>()
+        private var pingVersion = 0
+        private val pingAllKeys = HashSet<String>() // профили идущего «Пинг всех»
+        private var pingAllOk = 0
+        private var pingAllTotal = 0
+
+        /** Сколько профилей проверять разом при «Пинг всех» — как в окне. */
+        private const val PING_PARALLEL = 4
+        private val pinger = Executors.newFixedThreadPool(PING_PARALLEL)
+
+        private fun pingKey(name: String, server: String) =
+            name.lowercase() + "\n" + server.lowercase()
+
         private const val REQUEST_VPN = 1
         private const val REQUEST_NOTIFY = 3
         private const val TICK_MS = 1000L

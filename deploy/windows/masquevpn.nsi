@@ -29,10 +29,10 @@ Target amd64-unicode
 !include "WinMessages.nsh"
 
 !ifndef VERSION
-  !define VERSION "0.2.0"
+  !define VERSION "1.0.0"
 !endif
 !ifndef VERSION4
-  !define VERSION4 "0.2.0.0"
+  !define VERSION4 "1.0.0.0"
 !endif
 !ifndef SRC
   !define SRC "."
@@ -63,7 +63,7 @@ VIAddVersionKey /LANG=1049 "FileDescription" "Установка ${APP} — VPN 
 VIAddVersionKey /LANG=1049 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=1049 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=1049 "CompanyName" "${APP}"
-VIAddVersionKey /LANG=1049 "LegalCopyright" "${APP}"
+VIAddVersionKey /LANG=1049 "LegalCopyright" "© 2026 soways11, MIT"
 
 !define MUI_ICON   "${SRC}\masquevpn.ico"
 !define MUI_UNICON "${SRC}\masquevpn.ico"
@@ -151,6 +151,9 @@ Section "${APP}" SecMain
   File "${SRC}\build\${APP}.exe"
   File "${SRC}\build\${APP}-cli.exe"
   File "${SRC}\wintun\amd64\wintun.dll"
+  ; Лицензия и тексты лицензий чужого кода — к каждой копии бинарников.
+  File "/oname=LICENSE.txt" "${SRC}\..\..\LICENSE"
+  File "${SRC}\..\..\THIRD_PARTY_NOTICES.txt"
 
   ; Профили из папки, откуда запущен установщик. Только если в месте
   ; установки их ещё нет: при обновлении чужой копией не затираем.
@@ -222,6 +225,8 @@ Section "Uninstall"
   Delete "$INSTDIR\${APP}.exe"
   Delete "$INSTDIR\${APP}-cli.exe"
   Delete "$INSTDIR\wintun.dll"
+  Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\${APP}-crash.txt"
   Delete "$INSTDIR\${APP}-trace.txt"
   Delete "$SMPROGRAMS\${APP}.lnk"

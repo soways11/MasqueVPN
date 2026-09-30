@@ -16,10 +16,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/soways11/masquevpn/internal/client"
 	"github.com/soways11/masquevpn/internal/clientrun"
 	"github.com/soways11/masquevpn/internal/config"
 	"github.com/soways11/masquevpn/internal/logx"
 	"github.com/soways11/masquevpn/internal/netsetup"
+	"github.com/soways11/masquevpn/internal/version"
 )
 
 func main() {
@@ -41,7 +43,14 @@ func main() {
 	flag.StringVar(&prof.use, "profile-use", "", "выбрать профиль по имени")
 	flag.StringVar(&prof.remove, "profile-remove", "", "удалить профиль по имени")
 	killOff := flag.Bool("killswitch-off", false, "то же, что -cleanup (прежнее имя)")
+	showVersion := flag.Bool("version", false, "показать версию и выйти")
+	pingOnly := flag.Bool("ping", false, "пинг профиля: поднять сессию, сделать через неё HTTP GET на "+client.DefaultPingTarget+" и выйти")
+	pingTarget := flag.String("ping-target", client.DefaultPingTarget, "куда идёт запрос пинга: хост[:порт]")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("masquevpn-cli", version.Version)
+		return
+	}
 
 	// Страховка на случай, если клиент не дожил до выхода: убитая задача,
 	// краш, выключение по питанию. Работает всегда — без конфигурации и без
@@ -99,7 +108,11 @@ func main() {
 		fmt.Println("конфигурация в порядке")
 		return
 	}
+	if *pingOnly {
+		os.Exit(runPing(cfg, *pingTarget))
+	}
 	log := logx.New(cfg.LogLevel)
+	log.Info("masquevpn", "version", version.Version)
 	if profileName != "" {
 		// Имя профиля в журнале: при нескольких доступах «подключён» без
 		// уточнения, куда именно, — половина ответа.
@@ -113,6 +126,23 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("клиент остановлен")
+}
+
+// runPing — то же, что кнопка пинга в окне: сессия CONNECT-IP и GET через
+// неё. Туннель в системе при этом не поднимается.
+func runPing(cfg *config.Client, target string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), clientrun.PingTimeout)
+	defer cancel()
+	opt := clientrun.PingOptions(cfg)
+	opt.Logger = logx.New(cfg.LogLevel)
+	res, err := client.Ping(ctx, cfg, opt, target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "пинг: нет ответа —", clientrun.PingReason(err))
+		return 1
+	}
+	fmt.Printf("пинг: %d мс — GET %s через туннель, %s (порт %s, адрес сессии пинга %s)\n",
+		res.RTT.Milliseconds(), res.Target, res.Status, res.Port, res.Addr)
+	return 0
 }
 
 // loadConfig берёт конфигурацию из файла или из выбранного профиля.

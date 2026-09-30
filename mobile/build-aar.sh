@@ -40,7 +40,13 @@ cd "$root"
 # gomobile bind собирает обвязку, которая импортирует golang.org/x/mobile/bind,
 # и ищет этот пакет в зависимостях НАШЕГО модуля. В go.mod его нет (серверу
 # и окнам он не нужен), поэтому без этой строки bind падает с «no Go package
-# in golang.org/x/mobile/bind». Правит go.mod и go.sum — это ожидаемо.
+# in golang.org/x/mobile/bind». go get правит go.mod и go.sum (добавляет
+# x/mobile и тянет за ним свежие x/sys, x/tools…) — попав в коммит, это тихо
+# сменило бы зависимости всего проекта. Поэтому оба файла возвращаются как
+# были по выходу из скрипта, даже при ошибке.
+bak=$(mktemp -d)
+cp go.mod go.sum "$bak/"
+trap 'cp "$bak/go.mod" "$bak/go.sum" "$root/"; rm -rf "$bak"' EXIT
 go get golang.org/x/mobile/bind@$GOMOBILE_VERSION
 
 # Имя пакета Java оставляем по умолчанию (core): именно так его импортирует

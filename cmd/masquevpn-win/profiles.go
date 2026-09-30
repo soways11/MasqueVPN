@@ -179,6 +179,7 @@ func (a *app) removeProfile(name string) {
 		return
 	}
 	a.saveProfiles()
+	a.pings.Forget(name)
 	a.appendLog("профиль удалён: " + name)
 }
 

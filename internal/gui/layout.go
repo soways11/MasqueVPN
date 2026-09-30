@@ -123,11 +123,14 @@ const (
 	ItemPasteLink // вставить из буфера в поле ввода
 	ItemAddConfirm
 	ItemDeleteProfile
+	ItemPingAll // «Пинг всех» справа от метки «Профили»
 
 	// ItemProfileBase — начало диапазона профилей: ItemProfileBase+i выбирает
-	// i-й профиль, ItemProfileMenuBase+i открывает его меню.
+	// i-й профиль, ItemProfileMenuBase+i открывает его меню,
+	// ItemProfilePingBase+i проверяет связь с ним.
 	ItemProfileBase     ItemID = 1000
 	ItemProfileMenuBase ItemID = 2000
+	ItemProfilePingBase ItemID = 3000
 )
 
 // ProfileIndex разбирает идентификатор профиля обратно в номер.
@@ -145,6 +148,21 @@ func ProfileMenuIndex(id ItemID) (int, bool) {
 	}
 	return 0, false
 }
+
+// ProfilePingIndex — то же для кнопки пинга профиля.
+func ProfilePingIndex(id ItemID) (int, bool) {
+	if id >= ItemProfilePingBase && id < ItemProfilePingBase+1000 {
+		return int(id - ItemProfilePingBase), true
+	}
+	return 0, false
+}
+
+// Размер кнопки пинга в строке профиля. Одна на все клиенты: Android берёт
+// её из сгенерированных dimens (android.go).
+const (
+	PingPillW = 60
+	PingPillH = 24
+)
 
 // Hit — область, отзывающаяся на мышь.
 type Hit struct {
@@ -210,9 +228,16 @@ type Main struct {
 	StatCells [3]Rect
 
 	SectProfiles Rect
+	// PingAll — «Пинг всех» у правого края строки с меткой «Профили».
+	// Область нажатия выше самой надписи: по строчке в 14 точек не попасть.
+	PingAll      Rect
 	Profiles     []Rect
 	ProfileMenus []Rect // кнопка «…» в строке профиля
-	MoreProfiles Rect   // «ещё N — в настройках»; пусто, когда влезли все
+	// ProfilePings — кнопка пинга в строке профиля, слева от «…». Стоит там,
+	// где раньше была точка выбранного профиля: выбранный и так виден по
+	// рамке и цвету имени, а пинг нужен у каждой строки.
+	ProfilePings []Rect
+	MoreProfiles Rect // «ещё N — в настройках»; пусто, когда влезли все
 
 	LogRow Rect // строка «Журнал»: открывает экран журнала
 
@@ -267,6 +292,10 @@ func MainLayout(n int, h int32) Main {
 
 	y := m.Stats.Bottom() + 18
 	m.SectProfiles = Rect{PadX, y, ContentW, 14}
+	if n > 0 { // пинговать некого — и кнопки нет
+		const pingAllW = 96
+		m.PingAll = Rect{PadX + ContentW - pingAllW, y - 6, pingAllW, 26}
+	}
 	y += 14 + 10
 
 	m.LogRow = Rect{PadX, h - footerZone - 52, ContentW, 52}
@@ -279,11 +308,13 @@ func MainLayout(n int, h int32) Main {
 	}
 	m.Profiles = make([]Rect, shown)
 	m.ProfileMenus = make([]Rect, shown)
+	m.ProfilePings = make([]Rect, shown)
 	for i := 0; i < shown; i++ {
 		m.Profiles[i] = Rect{PadX, y, ContentW, RowH}
 		// Кнопка меню лежит внутри строки, у правого края: у неё своё
 		// действие, поэтому и своя область попадания.
 		m.ProfileMenus[i] = Rect{PadX + ContentW - 44, y + (RowH-30)/2, 36, 30}
+		m.ProfilePings[i] = Rect{m.ProfileMenus[i].X - 4 - PingPillW, y + (RowH-PingPillH)/2, PingPillW, PingPillH}
 		y += RowH + RowGap
 	}
 	if n > shown {
@@ -304,10 +335,16 @@ func (m Main) Hits() []Hit {
 		{ItemAddProfile, m.Plus},
 		{ItemConnect, m.Button},
 	}
-	// Кнопки меню идут раньше строк: они лежат внутри, и первое совпадение
-	// выигрывает — иначе «…» выбирало бы профиль вместо открытия меню.
+	if !m.PingAll.Empty() {
+		hits = append(hits, Hit{ItemPingAll, m.PingAll})
+	}
+	// Кнопки меню и пинга идут раньше строк: они лежат внутри, и первое
+	// совпадение выигрывает — иначе «…» или пинг выбирали бы профиль.
 	for i, r := range m.ProfileMenus {
 		hits = append(hits, Hit{ItemProfileMenuBase + ItemID(i), r})
+	}
+	for i, r := range m.ProfilePings {
+		hits = append(hits, Hit{ItemProfilePingBase + ItemID(i), r})
 	}
 	// Профиль выбирается нажатием на строку — это главное, ради чего
 	// список вынесен на первый экран.
@@ -409,6 +446,7 @@ type Settings struct {
 	SectProfiles Rect
 	Profiles     []Rect
 	ProfileMenus []Rect
+	ProfilePings []Rect // как на главном: итог пинга виден и у тех, кто туда не влез
 	AddProfile   Rect
 
 	SectSystem Rect
@@ -447,12 +485,14 @@ func SettingsLayout(n int, h int32) Settings {
 	sect(&s.SectProfiles)
 	s.Profiles = make([]Rect, n)
 	s.ProfileMenus = make([]Rect, n)
+	s.ProfilePings = make([]Rect, n)
 	for i := 0; i < n; i++ {
 		row(&s.Profiles[i])
 		// Кнопка меню лежит внутри строки, у правого края: у неё своё
 		// действие, поэтому и своя область попадания.
 		r := s.Profiles[i]
 		s.ProfileMenus[i] = Rect{r.Right() - 44, r.Y + (r.H-30)/2, 36, 30}
+		s.ProfilePings[i] = Rect{s.ProfileMenus[i].X - 4 - PingPillW, r.Y + (r.H-PingPillH)/2, PingPillW, PingPillH}
 	}
 	row(&s.AddProfile)
 	y += 12
@@ -492,6 +532,9 @@ func (s Settings) ScrollHits(offset int32) []Hit {
 	}
 	for i := range s.ProfileMenus { // раньше строк: лежат внутри них
 		add(ItemProfileMenuBase+ItemID(i), s.ProfileMenus[i])
+	}
+	for i := range s.ProfilePings {
+		add(ItemProfilePingBase+ItemID(i), s.ProfilePings[i])
 	}
 	for i := range s.Profiles {
 		add(ItemProfileBase+ItemID(i), s.Profiles[i])

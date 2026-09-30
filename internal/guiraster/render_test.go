@@ -96,6 +96,16 @@ func TestRenderPNG(t *testing.T) {
 			}
 			return v
 		}, gui.DefaultWinH},
+		{"main-ping", func() gui.View {
+			v := sampleView()
+			v.Profiles[0].Ping, v.Profiles[0].RTT = gui.PingOK, 38*time.Millisecond
+			v.Profiles[1].Ping = gui.PingFail
+			v.Profiles = append(v.Profiles,
+				gui.ProfileItem{Name: "Запасной", Server: "x.example.net:2053", Ping: gui.PingBusy},
+				gui.ProfileItem{Name: "Новый", Server: "fi.example.net:443"})
+			v.PingingAll = true
+			return v
+		}, gui.DefaultWinH},
 		{"main-many", func() gui.View {
 			v := sampleView()
 			for i := 0; i < 5; i++ {

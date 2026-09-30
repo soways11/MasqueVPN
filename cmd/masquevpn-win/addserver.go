@@ -234,6 +234,10 @@ func (a *app) confirmAdd() {
 
 	name := strings.TrimSpace(getText(a.edit.fields[gui.FieldName]))
 
+	oldName := ""
+	if a.editing && a.editIndex >= 0 && a.editIndex < len(a.profiles.List) {
+		oldName = a.profiles.List[a.editIndex].Name
+	}
 	pr, err := a.storeProfile(cfg, name)
 	if err != nil {
 		a.fail(0, err.Error())
@@ -241,6 +245,9 @@ func (a *app) confirmAdd() {
 	}
 	a.saveProfiles()
 	if a.editing {
+		// Адрес мог поменяться — старое время пинга уже не про этот профиль.
+		a.pings.Forget(oldName)
+		a.pings.Forget(pr.Name)
 		a.appendLog("профиль изменён: " + pr.Name)
 	} else {
 		a.appendLog("добавлен профиль: " + pr.Name)

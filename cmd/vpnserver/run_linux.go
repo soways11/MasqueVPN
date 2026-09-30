@@ -27,6 +27,7 @@ import (
 	"github.com/soways11/masquevpn/internal/site"
 	"github.com/soways11/masquevpn/internal/tun"
 	"github.com/soways11/masquevpn/internal/tunnel"
+	"github.com/soways11/masquevpn/internal/version"
 )
 
 // certHost достаёт домен из сертификата: именно он стоит в SNI, и именно его
@@ -462,7 +463,7 @@ func run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	routerDone := make(chan error, 1)
 	go func() { routerDone <- router.Run(rctx) }()
 
-	// Слушаем через masque.ListenAndServeUDP, а не srv.ListenAndServe: только
+	// Слушаем через masque.ServeUDP, а не srv.ListenAndServe: только
 	// так задаётся длина Connection ID сервера — её видно в открытую (см.
 	// masque.DefaultConnectionIDLength).
 	cidLen := masque.DefaultConnectionIDLength
@@ -497,7 +498,7 @@ func run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		}()
 	}
 	ports, _ := cfg.UDPPorts()
-	log.Info("сервер запущен", "listen", cfg.Listen, "udp_ports", ports, "tun", dev.Name(), "gateway", gwAddrs,
+	log.Info("сервер запущен", "version", version.Version, "listen", cfg.Listen, "udp_ports", ports, "tun", dev.Name(), "gateway", gwAddrs,
 		"mtu", dev.MTU(), "webtransport", *cfg.WebTransport, "кадры", packing != nil,
 		"профиль", profileName(cfg, profile))
 

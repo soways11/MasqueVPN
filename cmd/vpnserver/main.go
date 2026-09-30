@@ -23,6 +23,7 @@ import (
 
 	"github.com/soways11/masquevpn/internal/config"
 	"github.com/soways11/masquevpn/internal/logx"
+	"github.com/soways11/masquevpn/internal/version"
 )
 
 func main() {
@@ -31,6 +32,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "ports" {
 		os.Exit(portsCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println("vpnserver", version.Version)
+		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "genkey" {
 		key := make([]byte, 32)

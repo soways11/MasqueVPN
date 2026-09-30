@@ -172,15 +172,27 @@ if ($SkipCore -and (Test-Path $aar)) {
 } else {
 Write-Host "==> шаг 1/2: ядро (gomobile bind -> core.aar)"
 Push-Location $root
+# go get ниже правит go.mod и go.sum (добавляет golang.org/x/mobile и тянет
+# за ним свежие x/sys, x/tools…). Серверу и окнам это не нужно, а попав в
+# коммит, это тихо сменило бы зависимости всего проекта. Поэтому оба файла
+# сохраняются и возвращаются как были — даже если сборка упадёт.
+$modBackup = Join-Path $env:TEMP "masquevpn-go.mod.bak"
+$sumBackup = Join-Path $env:TEMP "masquevpn-go.sum.bak"
+Copy-Item (Join-Path $root "go.mod") $modBackup -Force
+Copy-Item (Join-Path $root "go.sum") $sumBackup -Force
 try {
     # gomobile bind ищет golang.org/x/mobile/bind в зависимостях нашего
-    # модуля; в go.mod его нет — добавляем (правит go.mod и go.sum).
+    # модуля; в go.mod его нет — добавляем на время сборки.
     go get "golang.org/x/mobile/bind@$gomobileVersion"
     if ($LASTEXITCODE -ne 0) { throw "go get golang.org/x/mobile/bind не удался" }
     gomobile bind -target="android/arm64,android/arm,android/amd64" -androidapi 24 `
         -tags utls -o (Join-Path $libs "core.aar") ./mobile/core
     if ($LASTEXITCODE -ne 0) { throw "gomobile bind не удался" }
-} finally { Pop-Location }
+} finally {
+    Copy-Item $modBackup (Join-Path $root "go.mod") -Force
+    Copy-Item $sumBackup (Join-Path $root "go.sum") -Force
+    Pop-Location
+}
 }
 
 $task, $apk = "assembleDebug", (Join-Path $root "mobile\android\app\build\outputs\apk\debug\app-debug.apk")

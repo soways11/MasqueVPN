@@ -55,8 +55,13 @@ func TestMainTextFits(t *testing.T) {
 		fits(t, "скорость", s, FaceValue, tileText)
 	}
 
-	// Список профилей: имя и адрес обрезаются, место под отметку выбранного.
-	rowText := m.Profiles[0].W - 2*15 - 30
+	// Список профилей: имя и адрес обрезаются и кончаются до кнопки пинга
+	// (так же считает paintProfileList).
+	rowText := m.ProfilePings[0].X - 8 - (m.Profiles[0].X + 15)
+	for _, s := range []string{"пинг", "…", "нет", "999 мс", "9,9 с", ">10 с", "<1 мс"} {
+		fits(t, "кнопка пинга", s, FaceSmall, PingPillW-12)
+	}
+	fits(t, "пинг всех", "Пинг всех", FaceLabel, m.PingAll.W)
 	fits(t, "имя профиля", strings.Repeat("ш", maxProfileNameChars), FaceRow, rowText)
 	fits(t, "адрес профиля", strings.Repeat("ш", maxProfileServerChars), FaceSmall, rowText)
 	fits(t, "метка профилей", "Профили", FaceLabel, m.SectProfiles.W-32)
@@ -105,9 +110,10 @@ func TestRowTextFits(t *testing.T) {
 		fits(t, "пояснение", r.hint, FaceSmall, textW)
 	}
 
-	// Профили: имя и адрес обрезаются, проверяем предельную длину.
-	fits(t, "имя профиля", strings.Repeat("ш", maxProfileNameChars), FaceRow, textW)
-	fits(t, "адрес профиля", strings.Repeat("ш", maxProfileServerChars), FaceSmall, textW)
+	// Профили: имя и адрес обрезаются и кончаются до кнопки пинга.
+	profW := s.ProfilePings[0].X - 8 - (s.Profiles[0].X + 15)
+	fits(t, "имя профиля", strings.Repeat("ш", maxProfileNameChars), FaceRow, profW)
+	fits(t, "адрес профиля", strings.Repeat("ш", maxProfileServerChars), FaceSmall, profW)
 
 	// Строка добавления — во всю ширину, без переключателя.
 	addW := s.AddProfile.W - 2*15

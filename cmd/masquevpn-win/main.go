@@ -46,6 +46,7 @@ import (
 	"github.com/soways11/masquevpn/internal/clientrun"
 	"github.com/soways11/masquevpn/internal/config"
 	"github.com/soways11/masquevpn/internal/gui"
+	"github.com/soways11/masquevpn/internal/version"
 )
 
 // Собственные сообщения окна.
@@ -112,8 +113,10 @@ type app struct {
 	addFailed   bool
 	addBadField int
 
-	meter     *gui.Meter
-	profiles  *config.Profiles
+	meter    *gui.Meter
+	profiles *config.Profiles
+	// pings — итоги пинга профилей; проверки идут в фоне, окно лишь рисует.
+	pings     *clientrun.PingBoard
 	autostart bool // кеш: спрашивать планировщик на каждую перерисовку нельзя
 
 	// Состояние движка. Его меняет фоновая горутина, поэтому под замком.
@@ -197,6 +200,8 @@ func main() {
 
 	a.loadProfiles()
 	trace(fmt.Sprintf("профилей загружено: %d", len(a.profiles.List)))
+	// InvalidateRect можно звать из любого потока, appendLog — тоже.
+	a.pings = clientrun.NewPingBoard(a.invalidate, a.appendLog)
 	a.winH = gui.LoadWindowPrefs(windowPrefsPath()).Height
 
 	inst := moduleHandle()
@@ -415,7 +420,7 @@ func wndProc(hwnd windows.HWND, message uint32, wParam, lParam uintptr) uintptr 
 		a.createEditors(hwnd)
 		a.trayAdd()
 		trace("окно создано, поля ввода готовы")
-		a.appendLog("готов к подключению")
+		a.appendLog("masquevpn " + version.Version + " — готов к подключению")
 
 	case wmCtlColorEdit:
 		return a.colorEdit(wParam)
@@ -508,6 +513,7 @@ func wndProc(hwnd windows.HWND, message uint32, wParam, lParam uintptr) uintptr 
 		// щелчком по значку в области уведомлений.
 		a.quitting = true
 		a.stopAndWait()
+		a.pings.Close()
 		procDestroyWindow.Call(uintptr(hwnd))
 
 	case wmDestroy:
@@ -631,6 +637,7 @@ func (a *app) view() gui.View {
 			Selected: strings.EqualFold(pr.Name, a.profiles.Current),
 		})
 	}
+	a.pings.Fill(&v)
 	return v
 }
 
@@ -817,7 +824,15 @@ func (a *app) activate(id gui.ItemID) {
 	case gui.ItemDeleteProfile:
 		a.deleteEdited()
 		a.invalidate()
+	case gui.ItemPingAll:
+		a.pings.PingAll(a.profiles.List)
 	default:
+		if i, ok := gui.ProfilePingIndex(id); ok {
+			if i < len(a.profiles.List) {
+				a.pings.Ping(a.profiles.List[i])
+			}
+			return
+		}
 		if i, ok := gui.ProfileIndex(id); ok {
 			a.selectProfile(i)
 			return

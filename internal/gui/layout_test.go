@@ -368,6 +368,7 @@ func TestMainHitsMatchLayout(t *testing.T) {
 		ItemClose: m.Caption.Close, ItemMinimize: m.Caption.Minimize,
 		ItemSettings: m.Gear, ItemAddProfile: m.Plus,
 		ItemConnect: m.Button, ItemLog: m.LogRow,
+		ItemPingAll: m.PingAll,
 	}
 	got := map[ItemID]Rect{}
 	for _, h := range m.Hits() {
@@ -375,6 +376,9 @@ func TestMainHitsMatchLayout(t *testing.T) {
 			continue // профили проверяются отдельно
 		}
 		if _, ok := ProfileMenuIndex(h.ID); ok {
+			continue
+		}
+		if _, ok := ProfilePingIndex(h.ID); ok {
 			continue
 		}
 		got[h.ID] = h.Rect
@@ -535,6 +539,104 @@ func TestProfileIndexRoundTrip(t *testing.T) {
 	}
 	if _, ok := ProfileIndex(ItemProfileMenuBase); ok {
 		t.Error("диапазоны профилей и их меню пересекаются")
+	}
+	for _, i := range []int{0, 5, 999} {
+		if got, ok := ProfilePingIndex(ItemProfilePingBase + ItemID(i)); !ok || got != i {
+			t.Errorf("пинг профиля %d вернулся как %d (ok=%v)", i, got, ok)
+		}
+	}
+	if _, ok := ProfileMenuIndex(ItemProfilePingBase); ok {
+		t.Error("диапазоны меню и пинга пересекаются")
+	}
+	if _, ok := ProfilePingIndex(ItemProfileMenuBase + 999); ok {
+		t.Error("меню опознано как пинг")
+	}
+}
+
+// TestPingButtons — кнопка пинга стоит в каждой строке, внутри неё, слева от
+// «…» и не налезая на неё; в списке нажатий она раньше строки (иначе нажатие
+// выбирало бы профиль). «Пинг всех» — справа от метки «Профили», на её
+// уровне, и не задевает ни строк, ни цифр над меткой.
+func TestPingButtons(t *testing.T) {
+	m := MainLayout(3, DefaultWinH)
+	if len(m.ProfilePings) != len(m.Profiles) {
+		t.Fatalf("кнопок пинга %d на %d строк", len(m.ProfilePings), len(m.Profiles))
+	}
+	order := map[ItemID]int{}
+	for i, h := range m.Hits() {
+		if _, ok := order[h.ID]; !ok {
+			order[h.ID] = i
+		}
+	}
+	for i, p := range m.ProfilePings {
+		row, menu := m.Profiles[i], m.ProfileMenus[i]
+		if !contains(row, p) {
+			t.Errorf("пинг %d вне строки: %+v / %+v", i, p, row)
+		}
+		if overlap(p, menu) || p.Right() > menu.X {
+			t.Errorf("пинг %d налез на «…» или стоит правее: %+v / %+v", i, p, menu)
+		}
+		if p.W != PingPillW || p.H != PingPillH {
+			t.Errorf("пинг %d размером %dx%d", i, p.W, p.H)
+		}
+		// По вертикали — посередине строки, как и «…».
+		if p.Y+p.H/2 != row.Y+row.H/2 {
+			t.Errorf("пинг %d не по центру строки", i)
+		}
+		pi, ok1 := order[ItemProfilePingBase+ItemID(i)]
+		ri, ok2 := order[ItemProfileBase+ItemID(i)]
+		if !ok1 || !ok2 || pi > ri {
+			t.Errorf("строка %d перехватывает нажатие на пинг", i)
+		}
+	}
+
+	pa := m.PingAll
+	if pa.Empty() {
+		t.Fatal("нет «Пинг всех»")
+	}
+	if pa.Right() != m.SectProfiles.Right() {
+		t.Errorf("«Пинг всех» не прижат вправо: %d ≠ %d", pa.Right(), m.SectProfiles.Right())
+	}
+	mid := m.SectProfiles.Y + m.SectProfiles.H/2
+	if pa.Y > mid || pa.Bottom() < mid {
+		t.Error("«Пинг всех» не на уровне метки «Профили»")
+	}
+	if overlap(pa, m.Stats) || overlap(pa, m.Profiles[0]) {
+		t.Errorf("«Пинг всех» задевает соседей: %+v", pa)
+	}
+	// Метка слева и кнопка справа не сходятся.
+	if float64(m.SectProfiles.X+32)+widthOf("Профили", FaceLabel) > float64(pa.X) {
+		t.Error("«Пинг всех» налезает на метку «Профили»")
+	}
+	if _, ok := order[ItemPingAll]; !ok {
+		t.Error("«Пинг всех» не нажимается")
+	}
+
+	// В настройках — такие же кнопки, и в ленте нажатий они раньше строк.
+	st := SettingsLayout(3, DefaultWinH)
+	for i, p := range st.ProfilePings {
+		if !contains(st.Profiles[i], p) || overlap(p, st.ProfileMenus[i]) {
+			t.Errorf("настройки, пинг %d: %+v", i, p)
+		}
+	}
+	sorder := map[ItemID]int{}
+	for i, h := range st.ScrollHits(0) {
+		if _, ok := sorder[h.ID]; !ok {
+			sorder[h.ID] = i
+		}
+	}
+	if p, ok := sorder[ItemProfilePingBase]; !ok || p > sorder[ItemProfileBase] {
+		t.Error("в настройках строка перехватывает нажатие на пинг")
+	}
+
+	// Без профилей пинговать некого: кнопки нет.
+	if e := MainLayout(0, DefaultWinH); !e.PingAll.Empty() {
+		t.Error("«Пинг всех» при пустом списке")
+	}
+	for _, h := range MainLayout(0, DefaultWinH).Hits() {
+		if h.ID == ItemPingAll {
+			t.Error("пустой «Пинг всех» в списке нажатий")
+		}
 	}
 }
 

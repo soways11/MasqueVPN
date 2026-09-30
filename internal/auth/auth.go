@@ -263,15 +263,6 @@ func (a *Authenticator) macWith(key []byte, version byte, ts int64, client, devi
 // Token генерирует свежий токен.
 func (a *Authenticator) Token() (string, error) { return a.token(tokenVersion) }
 
-// TokenLegacy генерирует токен версии 2 — без псевдонима устройства.
-//
-// Нужен для одного случая: сервер прошлой сборки не знает версии 3 и
-// отвечает на неё так же, как постороннему (обычной страницей). Клиент,
-// получив такой отказ, повторяет попытку старым токеном — иначе обновление
-// клиента раньше сервера означало бы «ничего не работает, и непонятно
-// почему». Все устройства такого клиента сервер видит как одно.
-func (a *Authenticator) TokenLegacy() (string, error) { return a.token(tokenV2) }
-
 func (a *Authenticator) token(version byte) (string, error) {
 	nonce := make([]byte, nonceLen)
 	if _, err := a.nonce(nonce); err != nil {
@@ -297,7 +288,13 @@ func (a *Authenticator) SetHeader(h http.Header) error {
 	return a.setHeader(h, tokenVersion)
 }
 
-// SetHeaderLegacy кладёт токен версии 2 — см. TokenLegacy.
+// SetHeaderLegacy кладёт токен версии 2 — без псевдонима устройства.
+//
+// Нужен для одного случая: сервер прошлой сборки не знает версии 3 и
+// отвечает на неё так же, как постороннему (обычной страницей). Клиент,
+// получив такой отказ, повторяет попытку старым токеном — иначе обновление
+// клиента раньше сервера означало бы «ничего не работает, и непонятно
+// почему». Все устройства такого клиента сервер видит как одно.
 func (a *Authenticator) SetHeaderLegacy(h http.Header) error {
 	return a.setHeader(h, tokenV2)
 }
@@ -321,7 +318,7 @@ func (a *Authenticator) Header() (http.Header, error) {
 	return h, a.SetHeader(h)
 }
 
-// HeaderLegacy — то же с токеном версии 2 (см. TokenLegacy).
+// HeaderLegacy — то же с токеном версии 2 (см. SetHeaderLegacy).
 func (a *Authenticator) HeaderLegacy() (http.Header, error) {
 	h := http.Header{}
 	return h, a.SetHeaderLegacy(h)

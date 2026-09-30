@@ -43,6 +43,8 @@ internal/gui/testdata/*.svg
 internal/guiraster/testdata/*.png
 
 # ---- прочее ----
+# Журналы ручных проверок и сборок в корне (_chk_*.log, _rel.log …).
+/_*.log
 .idea/
 .vscode/
 *.swp

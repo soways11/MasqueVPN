@@ -8,18 +8,19 @@
     "#1": {
       "0000": {
         "fixed": {
-          "file_version": "0.2.0.0",
-          "product_version": "0.2.0.0"
+          "file_version": "1.0.0.0",
+          "product_version": "1.0.0.0"
         },
         "info": {
           "0419": {
             "CompanyName": "masquevpn",
             "FileDescription": "masquevpn — VPN на MASQUE",
-            "FileVersion": "0.2.0",
+            "FileVersion": "1.0.0",
             "InternalName": "masquevpn",
+            "LegalCopyright": "© 2026 soways11, MIT",
             "OriginalFilename": "masquevpn.exe",
             "ProductName": "masquevpn",
-            "ProductVersion": "0.2.0"
+            "ProductVersion": "1.0.0"
           }
         }
       }

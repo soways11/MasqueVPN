@@ -19,6 +19,15 @@ import (
 )
 
 func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks) error {
+	// Убираем следы прошлого, возможно аварийного, запуска: оставшаяся
+	// аварийная блокировка заперла бы сеть, а подменённый resolv.conf увёл бы
+	// системный DNS в несуществующий туннель.
+	if rep, err := netsetup.Cleanup(); err != nil {
+		log.Warn("уборка следов прошлого запуска", "err", err)
+	} else if !rep.Empty() {
+		log.Info("уборка следов прошлого запуска", "итог", rep.String())
+	}
+
 	fwmark := cfg.FwMark
 	if fwmark == 0 {
 		fwmark = netsetup.DefaultFwMark
@@ -77,6 +86,7 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 		sess.Close()
 		return err
 	}
+	var ks *netsetup.KillSwitch
 	if *cfg.FullTunnel {
 		ft := &netsetup.FullTunnel{
 			Iface:  dev.Name(),
@@ -97,6 +107,49 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 			}
 		}()
 		log.Info("весь трафик идёт через туннель", "iface", dev.Name(), "fwmark", fmt.Sprintf("%#x", fwmark))
+
+		// Аварийное отключение: пока туннель поднят, наружу выпускаем только
+		// туннель, помеченный сокет клиента, петлю, established, локальные сети
+		// и kill_switch_allow. Иначе трафик, привязанный к физическому
+		// адаптеру, утёк бы мимо туннеля даже при верной таблице маршрутов.
+		if cfg.KillSwitch != nil && *cfg.KillSwitch {
+			allow, err := cfg.KillSwitchAllowed()
+			if err != nil {
+				sess.Close()
+				return err
+			}
+			failClosed := cfg.KillSwitchFailClosed != nil && *cfg.KillSwitchFailClosed
+			var stopWatch func()
+			if !failClosed {
+				// Fail-open: за упавшим клиентом приберётся сторож. При
+				// fail-closed сторожа нет — блокировка держится до следующего
+				// запуска или `vpnclient -cleanup`.
+				if s, err := StartWatchdog(); err != nil {
+					log.Warn("сторож не запустился: после аварийного завершения "+
+						"снять блокировку можно командой vpnclient -cleanup", "err", err)
+				} else {
+					stopWatch = s
+				}
+			}
+			k, err := netsetup.KillSwitchArm(dev.Name(), fwmark, allow)
+			if err != nil {
+				if stopWatch != nil {
+					stopWatch()
+				}
+				sess.Close()
+				return fmt.Errorf("аварийное отключение: %w", err)
+			}
+			ks = k
+			defer func() {
+				if err := ks.Disarm(); err != nil {
+					log.Warn("снятие аварийного отключения", "err", err)
+				}
+				if stopWatch != nil {
+					stopWatch()
+				}
+			}()
+			log.Info("аварийное отключение включено", "fail_closed", failClosed)
+		}
 	} else {
 		routes, _ := cfg.RoutePrefixes()
 		if err := netsetup.AddRoutes(dev.Name(), routes); err != nil {
@@ -108,7 +161,19 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 
 	// Прикрытие DNS поднимаем ДО подмены resolv.conf: адреса исходных
 	// резолверов нужны как раз оттуда.
-	StartDNSCover(ctx, cfg, opt.Protect, log)
+	resolvers := StartDNSCover(ctx, cfg, opt.Protect, log)
+	if ks != nil && len(resolvers) > 0 {
+		// Резолверы прикрытия помечены той же меткой (opt.Protect), так что
+		// правило по метке их уже пропускает; добавляем их адреса в список
+		// разрешённых явно — на случай пути без метки.
+		allow, _ := cfg.KillSwitchAllowed()
+		for _, r := range resolvers {
+			allow = append(allow, netip.PrefixFrom(r, r.BitLen()))
+		}
+		if err := ks.Reapply(allow); err != nil {
+			log.Warn("аварийное отключение: не удалось разрешить резолверы прикрытия", "err", err)
+		}
+	}
 
 	// Резолвер семьи, которой в туннеле нет, не заработает: система будет
 	// честно ждать его ответа на каждом имени и упираться в таймаут.

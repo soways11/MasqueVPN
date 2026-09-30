@@ -1,4 +1,4 @@
-# Привязки ядра к Java (сверено 2026-09-26)
+# Привязки ядра к Java (сверено 2026-09-29)
 
 Ошибка в API ядра проявляется не там, где сделана: `gomobile bind` откажется
 собирать привязку на машине с NDK, а до неё код может дожить внешне
@@ -44,6 +44,7 @@ public abstract class Core {
     public static native Profiles loadProfiles(String stored) throws Exception;
     public static native String   parseShared(String text);
     public static native boolean  isLink(String text);
+    public static native String   ping(String configJSON, String deviceID);
 }
 
 public interface Protector {
@@ -74,6 +75,7 @@ public final class Profiles {
     public native String current();
     public native String listJSON();
     public native String currentConfig();
+    public native String configFor(String name);
     public native String fieldsJSON(String name);
     public native String add(String server, String authKey, String clientID, String name);
     public native String update(String old, String server, String authKey, String clientID, String name);
@@ -97,5 +99,12 @@ public final class Profiles {
   бросают исключение: gomobile переносит в исключение только текст, а форме
   нужно ещё и поле, которое подсветить —
   `{"ok":false,"error":"…","field":2}`.
+- `ping` поднимает сессию CONNECT-IP и делает через неё HTTP GET на
+  example.com; блокирует до ответа (до 30 с) — звать только из фонового
+  потока. `deviceID` — тот же, что `setDeviceID` (ядро допишет «/ping»).
+  Ответ — JSON `{"ok":true,"rtt_ms":142,"port":"443","target":"example.com",
+  "status":"HTTP/1.1 200 OK","text":"142 мс"}` или
+  `{"ok":false,"text":"нет","error":"…"}`; `text` — готовая надпись для
+  кнопки, та же, что в окне (gui.FormatRTT).
 - Описание сети (`network`) наружу не торчит: gomobile не умеет связывать
   срезы, поэтому оно едет JSON-ом, а тип намеренно не экспортирован.

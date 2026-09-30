@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Строка профиля: имя (зелёное у выбранного), сервер под ним, точка у
-    выбранного и меню «⋯». Как paintProfileRow в окне.
+    Строка профиля: имя (зелёное у выбранного), сервер под ним, кнопка пинга
+    и меню «⋯». Как paintProfileList в окне.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -35,16 +35,23 @@
             tools:text="nl.example.net" />
     </LinearLayout>
 
-    <!-- Выбранный помечен точкой, а не словом: слово пришлось бы читать. -->
-    <View
-        android:id="@+id/selected"
-        android:layout_width="@dimen/dot"
-        android:layout_height="@dimen/dot"
+    <!--
+        Пинг — там, где раньше была точка выбранного: выбранный и так виден
+        по зелёному имени. Высота нажатия 44dp (пальцу меньше мало), а
+        видимая «таблетка» — 24dp, как PingPillH в окне: фон вписан с
+        отступами 10dp (bg_ping*).
+    -->
+    <TextView
+        android:id="@+id/ping"
+        android:layout_width="@dimen/ping_w"
+        android:layout_height="44dp"
         android:layout_marginStart="8dp"
-        android:layout_marginEnd="4dp"
-        android:background="@drawable/dot"
-        android:backgroundTint="@color/accent"
-        android:visibility="invisible" />
+        android:background="@drawable/bg_ping"
+        android:contentDescription="@string/ping_one"
+        android:gravity="center"
+        android:maxLines="1"
+        android:text="@string/ping_idle"
+        android:textAppearance="@style/TextAppearance.Masque.Small" />
 
     <ImageButton
         android:id="@+id/menu"

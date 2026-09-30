@@ -961,7 +961,9 @@ func TestPacingShapesStreamE2E(t *testing.T) {
 // снаружи: подключаемся к своему же серверу обычным QUIC-клиентом и
 // читаем транспортные параметры, которые он объявляет.
 func TestServerFingerprintProfile(t *testing.T) {
-	s := newStand(t, opts{})
+	// Профиль задан явно: с 29.09 по умолчанию стоит stock (легенда Caddy),
+	// а снятый с Cloudflare остался выбираемым — его и проверяем.
+	s := newStand(t, opts{extraSrv: map[string]any{"server_profile": "cloudflare"}})
 	s.server.waitLog(t, "профиль=", 10*time.Second)
 
 	out := mustNS(t, nsCli, filepath.Join(s.bin, "fpserver"), "-probe", "10.0.0.1:443", "-sni", sni, "-insecure")

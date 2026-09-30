@@ -80,16 +80,3 @@ func ServeUDP(srv *http3.Server, pc net.PacketConn, cidLen int) error {
 	defer ln.Close()
 	return srv.ServeListener(ln)
 }
-
-// ListenAndServeUDP открывает сокет по адресу и обслуживает сервер на нём.
-func ListenAndServeUDP(srv *http3.Server, addr string, cidLen int) error {
-	if addr == "" {
-		addr = srv.Addr
-	}
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		return err
-	}
-	defer pc.Close()
-	return ServeUDP(srv, pc, cidLen)
-}

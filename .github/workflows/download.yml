@@ -9,7 +9,7 @@
 # версии — ссылки из README не устаревают; версия и контрольные суммы —
 # в download/README.md.
 #
-# Вручную для уже опубликованного релиза:  gh workflow run download.yml -f tag=v0.3.1
+# Вручную для уже опубликованного релиза:  gh workflow run download.yml -f tag=v1.0.0
 name: Download folder
 
 on:
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Тег опубликованного релиза, например v0.3.1"
+        description: "Тег опубликованного релиза, например v1.0.0"
         required: true
 
 permissions:

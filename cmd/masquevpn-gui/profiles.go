@@ -163,6 +163,10 @@ func (a *app) confirmAdd() {
 		a.fail(config.FormErrorOf(err))
 		return
 	}
+	oldName := ""
+	if a.editing && a.editIdx >= 0 && a.editIdx < len(a.profiles.List) {
+		oldName = a.profiles.List[a.editIdx].Name
+	}
 	pr, err := a.storeProfile(cfg, name)
 	if err != nil {
 		a.fail(0, err.Error())
@@ -170,6 +174,9 @@ func (a *app) confirmAdd() {
 	}
 	a.saveProfiles()
 	if a.editing {
+		// Адрес мог поменяться — старое время пинга уже не про этот профиль.
+		a.pings.Forget(oldName)
+		a.pings.Forget(pr.Name)
 		a.appendLog("профиль изменён: " + pr.Name)
 	} else {
 		a.appendLog("добавлен профиль: " + pr.Name)
@@ -207,6 +214,7 @@ func (a *app) deleteEdited() {
 		return
 	}
 	a.saveProfiles()
+	a.pings.Forget(name)
 	a.appendLog("профиль удалён: " + name)
 	a.screen, a.editing, a.scrollY = a.addFrom, false, 0
 	a.clearNotice()
@@ -375,6 +383,7 @@ func (a *app) removeProfile(i int) {
 		return
 	}
 	a.saveProfiles()
+	a.pings.Forget(name)
 	a.appendLog("профиль удалён: " + name)
 	a.invalidate()
 }

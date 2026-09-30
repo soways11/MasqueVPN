@@ -291,6 +291,15 @@ func TestRenderScreens(t *testing.T) {
 			return v
 		}, ItemLog, DefaultWinH},
 		{"main-tall", sampleView, ItemNone, 900},
+		{"main-ping", func() View {
+			v := sampleView()
+			v.Profiles[0].Ping, v.Profiles[0].RTT = PingOK, 38*time.Millisecond
+			if len(v.Profiles) > 1 {
+				v.Profiles[1].Ping = PingFail
+			}
+			v.Profiles = append(v.Profiles, ProfileItem{Name: "запасной", Server: "vpn.example.org:8443", Ping: PingBusy})
+			return v
+		}, ItemPingAll, DefaultWinH},
 		{"add", func() View {
 			v := sampleView()
 			v.Screen = ScreenAdd

@@ -1,4 +1,4 @@
-# Релиз по тегу: git tag v0.3.0 && git push --tags
+# Релиз по тегу: git tag v1.0.0 && git push --tags
 #
 # Собирает всё, что раздаётся людям, и кладёт в ЧЕРНОВИК релиза —
 # опубликовать его (или удалить) решает человек, посмотрев список файлов.
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Версия без v, например 0.3.0 (для проверочной сборки без тега)"
+        description: "Версия без v, например 1.0.0 (для проверочной сборки без тега)"
         required: true
 
 permissions:
@@ -117,9 +117,10 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           gobin="$(go env GOPATH)/bin"
           export PATH="$PATH:$gobin"
-          # versionCode только растёт: номер запуска поверх тысячи — больше
-          # всех, что собирались вручную.
-          export GRADLE_ARGS="-PversionName=$VERSION -PversionCode=$((1000 + ${{ github.run_number }}))"
+          # versionCode выводится из версии в build.gradle.kts (1.0.0 → 1000000):
+          # он больше прежних 1000+номер запуска и совпадает с локальной
+          # сборкой той же версии.
+          export GRADLE_ARGS="-PversionName=$VERSION"
           sh mobile/build-apk.sh --release
           mkdir -p dist
           cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/masquevpn-$VERSION.apk"
@@ -136,6 +137,11 @@ jobs:
     needs: [version, desktop, android]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      # Только CHANGELOG.md: из него берётся текст релиза.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -145,6 +151,12 @@ jobs:
       - name: Черновик
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
+          # Текст релиза — раздел «## $VERSION» из CHANGELOG.md. Нет раздела —
+          # заметки по коммитам, как раньше (их всё равно правят до публикации).
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v v="$VERSION" '/^## /{ if (on) exit; if ($2 == v) { on = 1; next } } on' CHANGELOG.md > "$notes"
+          if [ -s "$notes" ]; then src="--notes-file=$notes"; else src="--generate-notes"; fi
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --draft --title "masquevpn ${{ needs.version.outputs.version }}" --generate-notes
+            --draft --title "masquevpn $VERSION" "$src"

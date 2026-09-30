@@ -103,6 +103,16 @@ func paintMain(cv Canvas, v View, hot, pressed ItemID, now time.Time) {
 // приходилось уходить в настройки.
 func paintProfileList(cv Canvas, v View, m Main, hot ItemID) {
 	sectionLabel(cv, m.SectProfiles, "Профили")
+	if len(v.Profiles) > 0 {
+		c := ColorDim
+		if v.PingingAll {
+			c = ColorMuted
+		} else if hot == ItemPingAll {
+			c = ColorAccent
+		}
+		cv.Text(v.PingAllLabel(), FaceLabel,
+			Rect{X: m.PingAll.X, Y: m.SectProfiles.Y, W: m.PingAll.W, H: m.SectProfiles.H}, c, AlignRight)
+	}
 
 	for i, r := range m.Profiles {
 		pr := v.Profiles[i]
@@ -120,14 +130,17 @@ func paintProfileList(cv Canvas, v View, m Main, hot ItemID) {
 
 		in := r.Inset(15)
 		menu := m.ProfileMenus[i]
+		ping := m.ProfilePings[i]
+		textW := ping.X - 8 - in.X
 		name, nameColor := Ellipsis(pr.Name, maxProfileNameChars), ColorText
 		if pr.Selected {
 			nameColor = ColorAccent
-			cv.Dot(Rect{X: menu.X - 16, Y: r.Y + r.H/2 - 3, W: 6, H: 6}, ColorAccent)
 		}
-		cv.Text(name, FaceRow, Rect{X: in.X, Y: in.Y, W: in.W - 60, H: 16}, nameColor, AlignLeft)
+		cv.Text(name, FaceRow, Rect{X: in.X, Y: in.Y, W: textW, H: 16}, nameColor, AlignLeft)
 		cv.Text(Ellipsis(Host(pr.Server), maxProfileServerChars), FaceSmall,
-			Rect{X: in.X, Y: in.Y + 18, W: in.W - 60, H: 14}, ColorDim, AlignLeft)
+			Rect{X: in.X, Y: in.Y + 18, W: textW, H: 14}, ColorDim, AlignLeft)
+
+		paintPingPill(cv, ping, pr, hot == ItemProfilePingBase+ItemID(i))
 
 		if hot == ItemProfileMenuBase+ItemID(i) {
 			cv.Round(menu, 8, ColorSurface2)
@@ -140,6 +153,23 @@ func paintProfileList(cv Canvas, v View, m Main, hot ItemID) {
 		cv.Text(fmt.Sprintf("ещё %d %s — в настройках", n, plural(n, "профиль", "профиля", "профилей")),
 			FaceSmall, m.MoreProfiles, ColorDim, AlignLeft)
 	}
+}
+
+// paintPingPill — кнопка пинга в строке профиля: обведённая «таблетка» с
+// итогом последней проверки или словом «пинг», пока не проверяли.
+func paintPingPill(cv Canvas, r Rect, pr ProfileItem, hot bool) {
+	if hot && pr.Ping != PingBusy {
+		cv.Round(r, r.H/2, ColorSurface2)
+	}
+	border := ColorBorderDim
+	switch pr.Ping {
+	case PingOK:
+		border = ColorAccentDim
+	case PingFail:
+		border = ColorDanger.Darken(0.45) // danger_line на Android
+	}
+	cv.Border(r, r.H/2, border, 1)
+	cv.Text(pr.PingLabel(), FaceSmall, r, pr.PingColor(), AlignCenter)
 }
 
 func paintCaption(cv Canvas, c Caption, hot ItemID) {
@@ -380,9 +410,10 @@ func paintSettings(cv Canvas, v View, hot, pressed ItemID) {
 
 	section(s.SectProfiles, "Профили")
 	for i, pr := range v.Profiles {
-		paintProfileRow(cv, move(s.Profiles[i]), move(s.ProfileMenus[i]), pr,
+		paintProfileRow(cv, move(s.Profiles[i]), move(s.ProfileMenus[i]), move(s.ProfilePings[i]), pr,
 			hot == ItemProfileBase+ItemID(i),
-			hot == ItemProfileMenuBase+ItemID(i))
+			hot == ItemProfileMenuBase+ItemID(i),
+			hot == ItemProfilePingBase+ItemID(i))
 	}
 	paintAddRow(cv, move(s.AddProfile), hot == ItemAddProfile)
 
@@ -456,22 +487,22 @@ func paintLinkRow(cv Canvas, r Rect, title, hint, link string, hot bool) {
 		Rect{X: in.Right() - 90, Y: in.Y + 9, W: 90, H: 16}, color, AlignRight)
 }
 
-func paintProfileRow(cv Canvas, r, menu Rect, pr ProfileItem, hot, menuHot bool) {
+func paintProfileRow(cv Canvas, r, menu, ping Rect, pr ProfileItem, hot, menuHot, pingHot bool) {
 	in := paintRowBase(cv, r, hot)
 	title := Ellipsis(pr.Name, maxProfileNameChars)
+	// Выбранный профиль виден по цвету имени, а не по слову «выбран»: слово
+	// на каждой строке пришлось бы читать, чтобы найти нужную. Точка, что
+	// раньше стояла слева от меню, уступила место кнопке пинга.
 	color := ColorText
 	if pr.Selected {
 		color = ColorAccent
 	}
-	cv.Text(title, FaceRow, Rect{X: in.X, Y: in.Y, W: in.W - 60, H: 16}, color, AlignLeft)
+	textW := ping.X - 8 - in.X
+	cv.Text(title, FaceRow, Rect{X: in.X, Y: in.Y, W: textW, H: 16}, color, AlignLeft)
 	cv.Text(Ellipsis(pr.Server, maxProfileServerChars), FaceSmall,
-		Rect{X: in.X, Y: in.Y + 18, W: in.W - 60, H: 14}, ColorDim, AlignLeft)
+		Rect{X: in.X, Y: in.Y + 18, W: textW, H: 14}, ColorDim, AlignLeft)
 
-	// Выбранный профиль помечен рамкой-галочкой слева от меню, а не словом:
-	// слово «выбран» на каждой строке пришлось бы читать, чтобы найти нужную.
-	if pr.Selected {
-		cv.Dot(Rect{X: menu.X - 16, Y: r.Y + r.H/2 - 3, W: 6, H: 6}, ColorAccent)
-	}
+	paintPingPill(cv, ping, pr, pingHot)
 	if menuHot {
 		cv.Round(menu, 8, ColorSurface2)
 	}

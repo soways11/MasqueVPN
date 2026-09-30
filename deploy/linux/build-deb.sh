@@ -1,8 +1,8 @@
 #!/bin/sh
 # Сборка пакета masquevpn для Debian и Ubuntu.
 #
-#   sh deploy/linux/build-deb.sh amd64 0.2.0 [каталог-для-пакета]
-#   sh deploy/linux/build-deb.sh arm64 0.2.0
+#   sh deploy/linux/build-deb.sh amd64 1.0.0 [каталог-для-пакета]
+#   sh deploy/linux/build-deb.sh arm64 1.0.0
 #
 # Нужны Go и dpkg-deb (есть на любом Debian/Ubuntu). Программы собираются из
 # исходников здесь же — пакет не зависит от того, что лежит в папках рядом.
@@ -20,14 +20,14 @@
 set -eu
 
 arch=${1:?архитектура: amd64 или arm64}
-version=${2:?версия, например 0.2.0}
+version=${2:?версия, например 1.0.0}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 out=${3:-$root/dist}
 # Кто собрал пакет — видно в «dpkg -s masquevpn» у каждого, кто его поставил.
 # Поэтому по умолчанию не чей-то адрес, а заглушка (.invalid — домен, который
 # заведомо никому не принадлежит); свой — через переменную:
-#   MAINTAINER="Имя <почта>" sh deploy/linux/build-deb.sh amd64 0.2.0
+#   MAINTAINER="Имя <почта>" sh deploy/linux/build-deb.sh amd64 1.0.0
 maintainer=${MAINTAINER:-masquevpn <packages@masquevpn.invalid>}
 
 case "$arch" in
@@ -44,12 +44,15 @@ mkdir -p "$pkg/usr/lib/masquevpn"
 # Тег utls — отпечаток ClientHello браузера; без cgo, чтобы пакет не зависел
 # от версии glibc на машине пользователя.
 (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags utls -trimpath \
-    -ldflags="-s -w" -o "$pkg/usr/lib/masquevpn/masquevpn-gui" ./cmd/masquevpn-gui)
+    -ldflags="-s -w -X github.com/soways11/masquevpn/internal/version.Version=$version" -o "$pkg/usr/lib/masquevpn/masquevpn-gui" ./cmd/masquevpn-gui)
 (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags utls -trimpath \
-    -ldflags="-s -w" -o "$pkg/usr/lib/masquevpn/masquevpn-cli" ./cmd/vpnclient)
+    -ldflags="-s -w -X github.com/soways11/masquevpn/internal/version.Version=$version" -o "$pkg/usr/lib/masquevpn/masquevpn-cli" ./cmd/vpnclient)
 
 echo "==> раскладка файлов"
 install -D -m 0755 "$here/masquevpn" "$pkg/usr/bin/masquevpn"
+# Лицензия и тексты лицензий чужого кода — к каждой копии бинарников.
+install -D -m 0644 "$root/LICENSE" "$pkg/usr/share/doc/masquevpn/LICENSE"
+install -D -m 0644 "$root/THIRD_PARTY_NOTICES.txt" "$pkg/usr/share/doc/masquevpn/THIRD_PARTY_NOTICES.txt"
 mkdir -p "$pkg/usr/bin"
 ln -s ../lib/masquevpn/masquevpn-cli "$pkg/usr/bin/masquevpn-cli"
 install -D -m 0644 "$here/masquevpn.desktop" "$pkg/usr/share/applications/masquevpn.desktop"
