@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -37,7 +38,13 @@ func TestLDFlagWorks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("собирает программу")
 	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("нет go в PATH (например, тест запущен под эмулятором)")
+	}
 	bin := filepath.Join(t.TempDir(), "vpnclient")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // без расширения Windows файл не запустит
+	}
 	cmd := exec.Command("go", "build", "-ldflags", LDFlag+"9.8.7", "-o", bin, "./cmd/vpnclient")
 	cmd.Dir = filepath.Join("..", "..")
 	if out, err := cmd.CombinedOutput(); err != nil {

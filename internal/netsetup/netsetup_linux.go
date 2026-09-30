@@ -180,23 +180,34 @@ type CleanupReport struct {
 	// DNS — возвращён оригинал /etc/resolv.conf, который подменил упавший
 	// клиент.
 	DNS bool
+	// KillSwitchUnchecked — таблицу блокировки проверить не удалось: нет прав
+	// на nftables (запуск не от root). Снять root-таблицу без прав всё равно
+	// нельзя, поэтому это не ошибка уборки, а оговорка в отчёте.
+	KillSwitchUnchecked bool
 }
 
 func (r CleanupReport) Empty() bool { return !r.DNS && !r.KillSwitch }
 
 func (r CleanupReport) String() string {
-	if r.Empty() {
-		return "следов прошлого запуска нет"
-	}
+	var s string
 	switch {
+	case r.Empty():
+		s = "следов прошлого запуска нет"
 	case r.KillSwitch && r.DNS:
-		return "убрано: аварийная блокировка снята и DNS восстановлен (" + ResolvConf + ")"
+		s = "убрано: аварийная блокировка снята и DNS восстановлен (" + ResolvConf + ")"
 	case r.KillSwitch:
-		return "убрано: аварийная блокировка снята"
+		s = "убрано: аварийная блокировка снята"
 	default:
-		return "убрано: DNS восстановлен (" + ResolvConf + ")"
+		s = "убрано: DNS восстановлен (" + ResolvConf + ")"
 	}
+	if r.KillSwitchUnchecked {
+		s += "; аварийная блокировка не проверена — нет прав на nftables (нужен root)"
+	}
+	return s
 }
+
+// removeKillSwitch — снятие блокировки для Cleanup; подменяется в тестах.
+var removeKillSwitch = removeKillSwitchTable
 
 // Cleanup убирает то, что на Linux переживает упавший клиент.
 //
@@ -214,25 +225,36 @@ func Cleanup() (CleanupReport, error) {
 	var rep CleanupReport
 
 	// Сначала аварийная блокировка: это самое опасное, что переживает клиента
-	// (машина без сети), и снять её надо даже если с DNS что-то не так.
-	if removed, err := removeKillSwitchTable(); err != nil {
-		return rep, fmt.Errorf("netsetup: снятие аварийной блокировки: %w", err)
+	// (машина без сети). Но её ошибка не останавливает уборку: DNS
+	// возвращается в любом случае, а ошибки сообщаются вместе.
+	var ksErr error
+	if removed, err := removeKillSwitch(); err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, os.ErrPermission) {
+			rep.KillSwitchUnchecked = true
+		} else {
+			ksErr = fmt.Errorf("netsetup: снятие аварийной блокировки: %w", err)
+		}
 	} else if removed {
 		rep.KillSwitch = true
 	}
+	dnsErr := restoreDNS(&rep)
+	return rep, errors.Join(ksErr, dnsErr)
+}
 
+// restoreDNS возвращает resolv.conf, подменённый упавшим клиентом.
+func restoreDNS(rep *CleanupReport) error {
 	backup := existingBackup()
 	if backup == "" {
-		return rep, nil // подменённого DNS нет: клиент вышел штатно или не запускался
+		return nil // подменённого DNS нет: клиент вышел штатно или не запускался
 	}
 	if b, err := os.ReadFile(ResolvConf); err == nil && !ownResolvConf(b) {
-		return rep, fmt.Errorf("netsetup: рядом с %s лежит %s, но сам %s уже не от клиента — "+
+		return fmt.Errorf("netsetup: рядом с %s лежит %s, но сам %s уже не от клиента — "+
 			"не трогаю, чтобы не затереть более новую настройку; сравните файлы и уберите лишний руками",
 			ResolvConf, backup, ResolvConf)
 	}
 	if err := os.Rename(backup, ResolvConf); err != nil {
-		return rep, fmt.Errorf("netsetup: восстановление %s: %w", ResolvConf, err)
+		return fmt.Errorf("netsetup: восстановление %s: %w", ResolvConf, err)
 	}
 	rep.DNS = true
-	return rep, nil
+	return nil
 }

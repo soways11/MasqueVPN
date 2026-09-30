@@ -79,8 +79,10 @@ func TestKillSwitchLinuxCleanup(t *testing.T) {
 		t.Fatal("нет Cleanup — уборка следов обязательна")
 	}
 	cleanup := src[strings.Index(src, "func Cleanup()"):]
-	mustContain(t, cleanup, "removeKillSwitchTable()",
+	mustContain(t, cleanup, "removeKillSwitch()",
 		"Cleanup обязан снимать аварийную блокировку, а не только чинить DNS")
+	mustContain(t, src, "var removeKillSwitch = removeKillSwitchTable",
+		"в Cleanup должна идти настоящая функция снятия, подмена — только в тестах")
 
 	// Прежняя команда снятия тоже реально снимает таблицу.
 	mustContain(t, src, "func KillSwitchOff()", "команда снятия должна остаться")
