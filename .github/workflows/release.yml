@@ -58,7 +58,7 @@ jobs:
           sh deploy/linux/build-deb.sh arm64 "$VERSION" dist
       - name: Пакет для VPS
         run: sh deploy/vps/build.sh dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop
           path: dist/*
@@ -125,7 +125,7 @@ jobs:
           mkdir -p dist
           cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/masquevpn-$VERSION.apk"
           rm -f mobile/android/keystore.properties
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.KEYSTORE_B64 != ''
         with:
           name: android
