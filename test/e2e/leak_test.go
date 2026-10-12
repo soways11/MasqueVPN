@@ -83,7 +83,10 @@ func ipv6StandWorks(t *testing.T) bool {
 		{"внешний адрес сервера (srv1)", srvOutV6},
 		{"«интернет»", internet6},
 	} {
-		out, err := nsRun(nsCli, "ping", "-6", "-n", "-W", "2", "-c", "1", hop.addr)
+		// Адрес источника задаём явно: иначе в разборе пришлось бы ещё
+		// гадать, не выбрало ли ядро link-local (ответ на него не вернулся
+		// бы) — а это к перехвату отношения не имеет.
+		out, err := nsRun(nsCli, "ping", "-6", "-n", "-W", "2", "-c", "1", "-I", cliV6, hop.addr)
 		if err == nil {
 			continue
 		}
@@ -94,6 +97,10 @@ func ipv6StandWorks(t *testing.T) bool {
 		}{
 			{nsCli, []string{"ip", "-6", "route", "show"}},
 			{nsCli, []string{"ip", "-6", "neigh", "show"}},
+			// Доходит ли до «интернета» сам сервер: разделяет «не
+			// пересылает» и «не находит соседа за srv1».
+			{nsSrv, []string{"ping", "-6", "-n", "-W", "2", "-c", "1", internet6}},
+			{nsSrv, []string{"ip", "-6", "neigh", "show"}},
 			{nsSrv, []string{"ip", "-6", "route", "show"}},
 			{nsSrv, []string{"sh", "-c", "cat /proc/sys/net/ipv6/conf/all/forwarding /proc/sys/net/ipv6/conf/srv0/forwarding /proc/sys/net/ipv6/conf/srv1/forwarding"}},
 			{nsInet, []string{"ip", "-6", "route", "show"}},
