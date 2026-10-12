@@ -34,6 +34,7 @@ const (
 	internet6 = "2001:db8:113::10"
 	cliV6     = "fd00:5:5::2"
 	srvV6     = "fd00:5:5::1"
+	srvOutV6  = "2001:db8:113::1"
 )
 
 // ipv6InKernel — IPv6 есть в ядре. В контейнерах его часто нет целиком, и
@@ -56,11 +57,54 @@ func directInternet(t *testing.T) {
 	// пакеты с него ядро не отправляет — тест ловил бы не утечку, а DAD.
 	mustNS(t, nsCli, "ip", "-6", "addr", "add", cliV6+"/64", "dev", "cli0", "nodad")
 	mustNS(t, nsSrv, "ip", "-6", "addr", "add", srvV6+"/64", "dev", "srv0", "nodad")
-	mustNS(t, nsSrv, "ip", "-6", "addr", "add", "2001:db8:113::1/64", "dev", "srv1", "nodad")
+	mustNS(t, nsSrv, "ip", "-6", "addr", "add", srvOutV6+"/64", "dev", "srv1", "nodad")
 	mustNS(t, nsInet, "ip", "-6", "addr", "add", "2001:db8:113::2/64", "dev", "inet0", "nodad")
 	mustNS(t, nsInet, "ip", "-6", "addr", "add", internet6+"/128", "dev", "inet0", "nodad")
 	mustNS(t, nsInet, "ip", "-6", "route", "add", "fd00:5:5::/64", "via", "2001:db8:113::1")
 	mustNS(t, nsCli, "ip", "-6", "route", "add", "default", "via", srvV6)
+	// Форвардинг IPv6 включает и сам vpnserver, но он запускается ПОЗЖЕ, а
+	// контрольная проверка стенда идёт до туннеля — ставим явно, чтобы она
+	// не зависела от порядка запуска.
+	mustNS(t, nsSrv, "sh", "-c", "echo 1 > /proc/sys/net/ipv6/conf/all/forwarding")
+}
+
+// ipv6StandWorks — ходит ли IPv6 из netns клиента до «интернета» ДО
+// подключения туннеля. Если нет, проверять утечку IPv6 нечем, и разбор
+// печатается по шагам: видно, на каком участке стенд не сошёлся, а не только
+// «0 received». Сам стенд при этом не считается негодным — остальные виды
+// трафика проверяются по-прежнему.
+func ipv6StandWorks(t *testing.T) bool {
+	t.Helper()
+	for _, hop := range []struct{ name, addr string }{
+		// Шлюз отвечает — значит канал и адреса в порядке.
+		{"шлюз туннельной сети (srv0)", srvV6},
+		// Внешний адрес сервера отвечает — значит дело не в канале, а
+		// дальше: в форвардинге или в обратном маршруте.
+		{"внешний адрес сервера (srv1)", srvOutV6},
+		{"«интернет»", internet6},
+	} {
+		out, err := nsRun(nsCli, "ping", "-6", "-n", "-W", "2", "-c", "1", hop.addr)
+		if err == nil {
+			continue
+		}
+		t.Logf("IPv6 в стенде не сошёлся: не отвечает %s (%s): %v\n%s", hop.name, hop.addr, err, out)
+		for _, d := range []struct {
+			ns   string
+			args []string
+		}{
+			{nsCli, []string{"ip", "-6", "route", "show"}},
+			{nsCli, []string{"ip", "-6", "neigh", "show"}},
+			{nsSrv, []string{"ip", "-6", "route", "show"}},
+			{nsSrv, []string{"sh", "-c", "cat /proc/sys/net/ipv6/conf/all/forwarding /proc/sys/net/ipv6/conf/srv0/forwarding /proc/sys/net/ipv6/conf/srv1/forwarding"}},
+			{nsInet, []string{"ip", "-6", "route", "show"}},
+			{nsInet, []string{"ip", "-6", "addr", "show", "dev", "inet0"}},
+		} {
+			got, _ := nsRun(d.ns, d.args...)
+			t.Logf("[%s] %s:\n%s", d.ns, strings.Join(d.args, " "), got)
+		}
+		return false
+	}
+	return true
 }
 
 // leakFlow — поток, который сторож увидел на проводе (см. test/e2e/leaktap).
@@ -163,6 +207,9 @@ func testNothingEscapes(t *testing.T, killSwitch bool) {
 	}
 	s := newStand(t, o)
 
+	// v6 — ходит ли IPv6 в стенде до туннеля; выясняется в контроле ниже.
+	v6 := false
+
 	// 1. Контроль стенда и сторожа: пока туннеля нет, прямой путь работает,
 	//    «интернет» видит настоящий адрес клиента, и сторож это видит тоже.
 	//    Без этой проверки весь тест мог бы быть зелёным при негодном стенде.
@@ -176,12 +223,11 @@ func testNothingEscapes(t *testing.T, killSwitch bool) {
 		if len(leaks) == 0 {
 			t.Fatal("сторож не увидел прямого запроса — проверять им нечего")
 		}
-		// И IPv6 до туннеля тоже должен ходить: иначе проверка «IPv6 не
-		// утёк» ничего не значит — он бы и так никуда не дошёл.
+		// И IPv6 до туннеля: без этого проверка «IPv6 не утёк» ничего не
+		// значит — он бы и так никуда не дошёл. Это не повод валить весь
+		// тест: остальные виды трафика проверяются независимо.
 		if ipv6InKernel() {
-			if out, err := nsRun(nsCli, "ping", "-6", "-n", "-W", "2", "-c", "1", internet6); err != nil {
-				t.Fatalf("стенд негоден: IPv6 до «интернета» не ходит и без туннеля: %v\n%s", err, out)
-			}
+			v6 = ipv6StandWorks(t)
 		}
 		t.Logf("без туннеля сторож видит %d поток(ов), первый: %s", len(leaks), leaks[0])
 	})
@@ -291,6 +337,9 @@ func testNothingEscapes(t *testing.T, killSwitch bool) {
 	t.Run("ipv6-без-адреса-в-туннеле", func(t *testing.T) {
 		if !ipv6InKernel() {
 			t.Skip("IPv6 выключен в ядре: трафика этой семьи не бывает")
+		}
+		if !v6 {
+			t.Skip("IPv6 в стенде не поднялся — проверять нечем, разбор по шагам выше")
 		}
 		noLeaks(t, s, "ipv6", func(t *testing.T) {
 			out, err := nsRun(nsCli, "ping", "-6", "-n", "-W", "2", "-c", "2", internet6)
