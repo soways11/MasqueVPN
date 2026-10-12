@@ -106,6 +106,46 @@ func TestKillSwitchConstruction(t *testing.T) {
 		}
 	})
 
+	t.Run("фильтры стоят и на пакетном слое", func(t *testing.T) {
+		// Слой ALE_AUTH_CONNECT спрашивают один раз — при установлении
+		// соединения, поэтому открытые ДО блокировки соединения он не
+		// видит, и они продолжают идти мимо туннеля. Закрывается это
+		// вторым набором фильтров на пакетных слоях. Мутация: убрать
+		// layerOutboundIPPacket* — лазейка возвращается.
+		for _, want := range []string{
+			"layerOutboundIPPacketV4 = windows.GUID{",
+			"layerOutboundIPPacketV6 = windows.GUID{",
+			"func packetFilterPlan(",
+		} {
+			if !strings.Contains(src, want) {
+				t.Errorf("нет %q: блокировка не увидит соединений, открытых до её включения", want)
+			}
+		}
+		// И ставятся они ОТДЕЛЬНОЙ транзакцией: если слоёв на системе нет,
+		// лучше остаться с прежней защитой ALE, чем не поднять блокировку
+		// вовсе. Мутация: добавить packetFilterPlan в основной цикл
+		// applyLocked — отказ пакетного слоя начнёт валить подключение.
+		if !strings.Contains(src, "func (k *KillSwitch) addPacketLayers(") {
+			t.Error("пакетные фильтры ставятся не своей транзакцией: их отказ утянет " +
+				"за собой всю блокировку")
+		}
+		if !strings.Contains(src, "func (k *KillSwitch) PacketLayersFailed()") {
+			t.Error("нет способа узнать, что пакетный слой не встал — клиент промолчит " +
+				"о том, что защита слабее обещанной")
+		}
+		run := readSource(t, "../clientrun/run_windows.go")
+		if !hasCall(run, "ks.PacketLayersFailed()") {
+			t.Error("клиент не сообщает о неудаче пакетного слоя")
+		}
+		// Перехват при полном туннеле поднимается безусловно: при
+		// kill_switch: false сокет, привязанный к адаптеру, иначе уйдёт
+		// мимо туннеля. Мутация: вернуть обрамление по флагу.
+		if strings.Contains(ksLiveWin(run), "if cfg.KillSwitch != nil && *cfg.KillSwitch {") {
+			t.Error("фильтры снова под флагом kill_switch: при выключенном флаге " +
+				"трафик сокета, привязанного к адаптеру, уйдёт мимо туннеля")
+		}
+	})
+
 	t.Run("применение идёт одной транзакцией", func(t *testing.T) {
 		if !strings.Contains(src, "procFwpmTransBegin0") ||
 			!strings.Contains(src, "procFwpmTransAbort0") ||
@@ -128,4 +168,18 @@ func section(src, header string) string {
 		return rest[:j]
 	}
 	return rest
+}
+
+// ksLiveWin — только живой код, без строк-комментариев: закомментированная
+// строка иначе обманула бы стража.
+func ksLiveWin(src string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

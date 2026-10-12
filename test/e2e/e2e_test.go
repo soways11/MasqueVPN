@@ -118,6 +118,7 @@ func buildBinaries(t *testing.T) string {
 			{"inetsrv", "./test/e2e/inetsrv", ""},
 			{"fpserver", "./cmd/fpserver", ""},
 			{"dpitap", "./test/e2e/dpitap", ""},
+			{"leaktap", "./test/e2e/leaktap", ""},
 			{"acmeca", "./test/e2e/acmeca", ""},
 			{"androidsim", "./test/e2e/androidsim", ""},
 		} {
@@ -340,6 +341,12 @@ type opts struct {
 	// (остальное — пустой ответ). Нужен, чтобы клиент мог найти сервер по
 	// имени, как в жизни.
 	dnsAnswer string
+	// directInternet даёт клиенту РАБОЧИЙ путь в «интернет» мимо туннеля:
+	// маршрут по умолчанию и обратный маршрут у «интернета», а при живом в
+	// ядре IPv6 — ещё и вторую семью адресов. Без этого «утекло» и «не
+	// дошло» выглядят снаружи одинаково, и полноту перехвата проверить
+	// нечем: любой успех можно списать на туннель.
+	directInternet bool
 	// noClient поднимает только сервер: клиента тест запускает сам. Нужно
 	// там, где вместо vpnclient работает другой клиент — например имитатор
 	// VpnService для мобильного ядра.
@@ -356,11 +363,17 @@ func newStand(t *testing.T, o opts) *stand {
 	s.authKey = strings.TrimSpace(sh(t, filepath.Join(bin, "vpnserver"), "genkey"))
 
 	start(t, nsInet, "inetsrv", filepath.Join(bin, "inetsrv"), "-addr", internet+":8080", "-udp", internet+":7")
-	if o.dnsResolver {
-		// Резолвер за шлюзом и маршрут по умолчанию у клиента — то, что
-		// есть у любой машины ДО включения VPN.
-		mustNS(t, nsSrv, "ip", "addr", "add", ispResolver+"/32", "dev", "lo")
+	if o.dnsResolver || o.directInternet {
+		// Маршрут по умолчанию через шлюз провайдера — то, что есть у любой
+		// машины ДО включения VPN.
 		mustNS(t, nsCli, "ip", "route", "add", "default", "via", "10.0.0.1")
+	}
+	if o.directInternet {
+		directInternet(t)
+	}
+	if o.dnsResolver {
+		// Резолвер за шлюзом, а не в одной подсети с клиентом.
+		mustNS(t, nsSrv, "ip", "addr", "add", ispResolver+"/32", "dev", "lo")
 		args := []string{filepath.Join(bin, "inetsrv"), "-dns", ispResolver + ":53", "-addr", "", "-udp", ""}
 		if o.dnsAnswer != "" {
 			args = append(args, "-dns-a", o.dnsAnswer)

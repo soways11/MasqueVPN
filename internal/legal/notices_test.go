@@ -48,6 +48,10 @@ func TestLicensesShipped(t *testing.T) {
 		"deploy/linux/build-deb.sh":    {"LICENSE", "THIRD_PARTY_NOTICES.txt"},
 		"deploy/vps/build.sh":          {"LICENSE", "THIRD_PARTY_NOTICES.txt"},
 		"deploy/windows/masquevpn.nsi": {"LICENSE", "THIRD_PARTY_NOTICES.txt"},
+		// APK: файлы копируются в assets на сборке (задача copyLegal).
+		// Долгое время APK не несла их вовсе — код сторонних библиотек без
+		// текстов их лицензий, чего MIT и BSD прямо требуют.
+		"mobile/android/app/build.gradle.kts": {"LICENSE", "THIRD_PARTY_NOTICES.txt"},
 	} {
 		b, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {

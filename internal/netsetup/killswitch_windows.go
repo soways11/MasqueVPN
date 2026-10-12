@@ -67,6 +67,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -113,6 +114,26 @@ var (
 	condIPRemoteAddress = windows.GUID{
 		Data1: 0xb235ae9a, Data2: 0x1d64, Data3: 0x49b8,
 		Data4: [8]byte{0xa4, 0x4c, 0x5f, 0xf3, 0xd9, 0x09, 0x50, 0x45}}
+)
+
+// Пакетные слои: решение принимается на КАЖДЫЙ исходящий пакет, а не один раз
+// при установлении соединения.
+//
+// Зачем они нужны помимо ALE. Слой ALE_AUTH_CONNECT спрашивают один раз — при
+// установлении соединения. Поэтому соединения, открытые ДО включения
+// блокировки, он не видит вовсе: они продолжают идти мимо туннеля открытым
+// текстом, пока весь новый трафик уже перехвачен. Для VPN это утечка ровно
+// того рода, от которой он и защищает: пользователь видит «подключено», а
+// начатая минуту назад загрузка едет напрямую. На Linux та же дырка
+// закрывалась отказом от исключения по состоянию соединения (см.
+// killswitch_linux.go), здесь — вторым набором фильтров на пакетном слое.
+var (
+	layerOutboundIPPacketV4 = windows.GUID{
+		Data1: 0x1e5c9fae, Data2: 0x8a84, Data3: 0x4135,
+		Data4: [8]byte{0xa3, 0x31, 0x95, 0x0b, 0x54, 0x22, 0x9e, 0xcd}}
+	layerOutboundIPPacketV6 = windows.GUID{
+		Data1: 0xa3b3ab6b, Data2: 0x3564, Data3: 0x488c,
+		Data4: [8]byte{0x91, 0x17, 0xf3, 0x4e, 0x82, 0x14, 0x27, 0x63}}
 )
 
 const (
@@ -261,6 +282,8 @@ type fwpV6AddrAndMask struct {
 type KillSwitch struct {
 	mu sync.Mutex
 	h  windows.Handle // 0 — уже снято
+	// packetErr — почему не встали фильтры пакетного слоя (nil, если встали).
+	packetErr error
 }
 
 // ErrKillSwitchClosed — операция над уже снятой блокировкой.
@@ -376,7 +399,46 @@ func (k *KillSwitch) applyLocked(tunLUID uint64, allow []netip.Prefix, replace b
 		return fmt.Errorf("netsetup: FwpmTransactionCommit0: 0x%x", r)
 	}
 	committed = true
+
+	// Пакетные слои — отдельной транзакцией и не фатально: см.
+	// packetFilterPlan. Ошибку запоминаем, чтобы клиент сказал о ней в
+	// журнале: защита от утечки в этом случае слабее обещанной, и молчать
+	// об этом нельзя.
+	k.packetErr = k.addPacketLayers(tunLUID, allow)
 	return nil
+}
+
+// addPacketLayers ставит набор фильтров на пакетных слоях своей транзакцией.
+// Неудача откатывает только её: основной набор ALE остаётся стоять.
+func (k *KillSwitch) addPacketLayers(tunLUID uint64, allow []netip.Prefix) error {
+	if r, _, _ := procFwpmTransBegin0.Call(uintptr(k.h), 0); r != 0 {
+		return fmt.Errorf("netsetup: FwpmTransactionBegin0 (пакетный слой): 0x%x", r)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			procFwpmTransAbort0.Call(uintptr(k.h))
+		}
+	}()
+	for _, spec := range packetFilterPlan(tunLUID, allow) {
+		if err := addFilter(k.h, spec); err != nil {
+			return fmt.Errorf("%s (пакетный слой): %w", spec.name, err)
+		}
+	}
+	if r, _, _ := procFwpmTransCommit0.Call(uintptr(k.h)); r != 0 {
+		return fmt.Errorf("netsetup: FwpmTransactionCommit0 (пакетный слой): 0x%x", r)
+	}
+	committed = true
+	return nil
+}
+
+// PacketLayersFailed — почему не встали фильтры пакетного слоя (nil, если
+// встали). Пока они стоят, блокировка рвёт и соединения, открытые до её
+// включения; без них такие соединения продолжают идти мимо туннеля.
+func (k *KillSwitch) PacketLayersFailed() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.packetErr
 }
 
 // KillSwitchOff — аварийный выход: снимает блокировку, оставшуюся от клиента
@@ -553,12 +615,32 @@ type filterSpec struct {
 	pin []any
 }
 
-// filterPlan строит весь набор фильтров для v4 и v6.
+// filterPlan строит набор фильтров на слоях ALE — тех, где решение
+// принимается при установлении соединения.
 func filterPlan(tunLUID uint64, allow []netip.Prefix) []filterSpec {
+	return planFor([]windows.GUID{layerAleAuthConnectV4, layerAleAuthConnectV6},
+		[]windows.GUID{layerAleAuthConnectV6}, tunLUID, allow)
+}
+
+// packetFilterPlan — тот же набор, но на пакетных слоях: там решение
+// принимается на каждый пакет, поэтому блокировка достаёт и соединения,
+// открытые ДО её включения (см. layerOutboundIPPacketV4).
+//
+// Ставится ОТДЕЛЬНОЙ транзакцией, а не вместе с основным набором: если этих
+// слоёв на системе нет или они не принимают наши условия, лучше остаться с
+// прежней защитой ALE и сказать об этом, чем не поднять блокировку вовсе.
+func packetFilterPlan(tunLUID uint64, allow []netip.Prefix) []filterSpec {
+	return planFor([]windows.GUID{layerOutboundIPPacketV4, layerOutboundIPPacketV6},
+		[]windows.GUID{layerOutboundIPPacketV6}, tunLUID, allow)
+}
+
+// planFor строит набор «разрешения + блокировка» на каждом из слоёв layers;
+// v6Layers перечисляет те из них, что относятся к IPv6.
+func planFor(layers, v6Layers []windows.GUID, tunLUID uint64, allow []netip.Prefix) []filterSpec {
 	var specs []filterSpec
 
-	for _, layer := range []windows.GUID{layerAleAuthConnectV4, layerAleAuthConnectV6} {
-		v6 := layer == layerAleAuthConnectV6
+	for _, layer := range layers {
+		v6 := slices.Contains(v6Layers, layer)
 
 		// 1. Всё, что уже уходит через интерфейс туннеля, — можно.
 		luid := tunLUID

@@ -32,9 +32,26 @@ fun versionCodeOf(v: String): Int {
     return major.toInt() * 1_000_000 + minor.toInt() * 10_000 + patch.toInt() * 100
 }
 
+// Тексты лицензий внутрь APK. На desktop LICENSE и THIRD_PARTY_NOTICES.txt
+// кладутся рядом с программой установщиком (.deb, NSIS, пакет VPS), а APK их
+// до сих пор не несёт вовсе — то есть пользователь Android получает код
+// сторонних библиотек без текстов их лицензий, чего MIT и BSD прямо требуют.
+// Файлы копируются в assets на сборке, а не лежат в репозитории копией:
+// копия разъехалась бы с корневой (её пересобирает
+// deploy/third-party-notices.sh), и именно устаревшую увёз бы APK.
+val legalAssets = layout.buildDirectory.dir("generated/legal")
+
+val copyLegal by tasks.registering(Copy::class) {
+    from(rootProject.file("../../LICENSE"))
+    from(rootProject.file("../../THIRD_PARTY_NOTICES.txt"))
+    into(legalAssets)
+}
+
 android {
     namespace = "io.masquevpn.android"
     compileSdk = 35
+
+    sourceSets["main"].assets.srcDir(legalAssets)
 
     defaultConfig {
         applicationId = "io.masquevpn.android"
@@ -68,6 +85,14 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+}
+
+// Копирование лицензий должно случиться до сборки assets — иначе задача
+// просто не выполнится и APK снова уедет без текстов.
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) {
+        dependsOn(copyLegal)
     }
 }
 

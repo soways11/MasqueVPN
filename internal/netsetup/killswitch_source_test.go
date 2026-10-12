@@ -46,9 +46,24 @@ func TestKillSwitchLinuxDecisions(t *testing.T) {
 	// блокировкой. Мутация: убрать правило по метке.
 	mustContain(t, src, "MetaKeyMARK", "помеченный сокет клиента должен проходить")
 
-	// Уже установленные соединения и связанные с ними. Мутация: убрать ct.
-	mustContain(t, src, "CtStateBitESTABLISHED", "established должен проходить")
-	mustContain(t, src, "CtStateBitRELATED", "related должен проходить")
+	// Исключения по состоянию соединения запрещены: правило «established —
+	// можно» пропускало наружу поток, открытый ДО подключения туннеля (его
+	// ловит сквозной тест TestNothingEscapesTunnel), а сузить его до
+	// «ответы на входящие» нельзя — conntrack начинает следить вместе с
+	// таблицей и видит такой поток входящим. Мутация: вернуть любое
+	// упоминание ct state — и лазейка откроется снова.
+	for _, bad := range []string{"CtStateBit", "CtKeySTATE", "CtKeyDIRECTION"} {
+		if strings.Contains(ksLive(src), bad) {
+			t.Errorf("в коде снова есть %q: исключение по состоянию соединения "+
+				"пропускает наружу потоки, открытые до подключения туннеля", bad)
+		}
+	}
+
+	// Канальные адреса (DHCP, ND, mDNS) разрешены: за пределы сегмента они
+	// не уходят, а без них ломается продление аренды адреса. Мутация:
+	// убрать linkScopePrefixes из набора правил.
+	mustContain(t, src, "linkScopePrefixes()", "канальные адреса должны проходить")
+	mustContain(t, src, `netip.MustParsePrefix("255.255.255.255/32")`, "продление аренды DHCP идёт широковещательно")
 
 	// Петля и туннель.
 	mustContain(t, src, `ifname("lo")`, "петля должна проходить")

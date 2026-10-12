@@ -479,3 +479,31 @@ func readText(path string) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	return bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n")), err
 }
+
+// TestNoFamilyAllowedPastTunnel — приложение не должно звать allowFamily и
+// allowBypass.
+//
+// Полнота перехвата на Android держится на умолчании VpnService: если у
+// интерфейса нет ни адреса, ни маршрута, ни резолвера какой-то семьи
+// адресов, система блокирует весь её трафик сама. Именно на это мы и
+// опираемся, когда сервер не выдал IPv6 (см. mobile/core, networkFor): на
+// desktop IPv6 заворачивается в туннель всегда, а здесь его блокирует
+// система. allowFamily это умолчание ОТМЕНЯЕТ — и весь IPv6 ушёл бы мимо
+// туннеля по мобильной сети, то есть ровно та утечка, от которой весь
+// полный туннель и нужен. allowBypass разрешает любому приложению обойти
+// туннель по своему желанию — там же.
+//
+// Проверить это сборкой нельзя: утечка не ломает ничего видимого, она
+// просто есть. Поэтому стережём чтением исходников.
+func TestNoFamilyAllowedPastTunnel(t *testing.T) {
+	for path, text := range kotlinFiles(t) {
+		code := stripComments(text)
+		for _, bad := range []string{"allowFamily", "allowBypass"} {
+			if strings.Contains(code, bad) {
+				t.Errorf("%s зовёт %s: это отменяет блокировку трафика мимо туннеля — "+
+					"семья адресов без адреса в туннеле (например IPv6, когда сервер его "+
+					"не выдал) уйдёт в обычную сеть", rel(path), bad)
+			}
+		}
+	}
+}

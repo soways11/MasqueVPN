@@ -56,10 +56,17 @@ done
 die() { echo "ОШИБКА: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
-[ -n "$DOMAIN" ] || die "не задан домен.  Запуск: sudo sh install.sh ВАШ.ДОМЕН почта@пример.рф [--production]
+# Полный путь к себе: подсказки печатают именно его. Скрипт запускают из
+# распакованного архива (sudo sh /tmp/masquevpn-vps/install.sh ...), и короткое
+# "sudo sh install.sh" из подсказки не работает — его копируют и получают
+# "No such file or directory", уже не помня, куда распаковали.
+here=$(cd "$(dirname "$0")" && pwd)
+self="sudo sh $here/install.sh"
+
+[ -n "$DOMAIN" ] || die "не задан домен.  Запуск: $self ВАШ.ДОМЕН почта@пример.рф [--production]
      либо рядом с чужим веб-сервером:
-     sudo sh install.sh ВАШ.ДОМЕН --cert /путь/fullchain.pem --key /путь/privkey.pem"
-[ "$(id -u)" = "0" ] || die "нужен root: sudo sh install.sh ..."
+     $self ВАШ.ДОМЕН --cert /путь/fullchain.pem --key /путь/privkey.pem"
+[ "$(id -u)" = "0" ] || die "нужен root: $self ..."
 
 # Режим определяется тем, дали ли готовый сертификат.
 if [ -n "$CERT" ] || [ -n "$KEY" ]; then
@@ -71,8 +78,6 @@ else
     OWN_CERT=no
     [ -n "$EMAIL" ] || die "не задана почта (на неё Let's Encrypt шлёт письма об истечении)"
 fi
-
-here=$(cd "$(dirname "$0")" && pwd)
 
 # ---------- архитектура ----------
 case "$(uname -m)" in
@@ -158,8 +163,8 @@ if [ -n "$tcp_443" ] && [ "$tcp_443" != "vpnserver" ]; then
         die "там уже чужой веб-сервер ($tcp_443), и проверку Let's Encrypt провести нечем.
      Два выхода:
        1) оставить его и дать masquevpn готовый сертификат (тот же, что у него):
-            sudo sh install.sh $DOMAIN --cert /etc/letsencrypt/live/$DOMAIN/fullchain.pem \\
-                                       --key  /etc/letsencrypt/live/$DOMAIN/privkey.pem
+            $self $DOMAIN --cert /etc/letsencrypt/live/$DOMAIN/fullchain.pem \\
+                  --key  /etc/letsencrypt/live/$DOMAIN/privkey.pem
           masquevpn возьмёт только UDP, TCP останется за ним;
        2) освободить TCP/443 и ставить с выдачей сертификата."
     fi
@@ -555,5 +560,5 @@ echo "   диагностика:   sudo sh $here/diag.sh"
 if [ "$OWN_CERT" = "no" ] && [ "$MODE" != "--production" ]; then
     echo
     echo "   Сейчас STAGING. Убедившись, что всё работает, повторите:"
-    echo "     sudo rm /etc/masquevpn/server.json && sudo sh $here/install.sh $DOMAIN $EMAIL --production"
+    echo "     sudo rm /etc/masquevpn/server.json && $self $DOMAIN $EMAIL --production"
 fi

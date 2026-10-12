@@ -108,37 +108,55 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 		}()
 		log.Info("весь трафик идёт через туннель", "iface", dev.Name(), "fwmark", fmt.Sprintf("%#x", fwmark))
 
-		// Аварийное отключение: пока туннель поднят, наружу выпускаем только
-		// туннель, помеченный сокет клиента, петлю, established, локальные сети
-		// и kill_switch_allow. Иначе трафик, привязанный к физическому
-		// адаптеру, утёк бы мимо туннеля даже при верной таблице маршрутов.
-		if cfg.KillSwitch != nil && *cfg.KillSwitch {
-			allow, err := cfg.KillSwitchAllowed()
-			if err != nil {
-				sess.Close()
-				return err
+		// Таблица nftables: пока туннель поднят, наружу выпускаем только
+		// туннель, помеченный сокет клиента, петлю, канальные адреса
+		// (DHCP, поиск соседей), локальные сети и kill_switch_allow.
+		//
+		// Поднимается при полном туннеле ВСЕГДА, а не только по флагу
+		// kill_switch: трафик сокета, привязанного к физическому адаптеру
+		// (SO_BINDTODEVICE), уходит мимо туннеля при любой таблице маршрутов
+		// — ядро отправляет его на интерфейс само (см. netsetup,
+		// fulltunnel_linux.go). Флаг решает другое: что будет после краха
+		// клиента — сеть откроется (по умолчанию, за клиентом приберётся
+		// сторож) или останется закрытой (kill_switch_fail_closed).
+		strict := cfg.KillSwitch != nil && *cfg.KillSwitch
+		allow, err := cfg.KillSwitchAllowed()
+		if err != nil {
+			sess.Close()
+			return err
+		}
+		failClosed := strict && cfg.KillSwitchFailClosed != nil && *cfg.KillSwitchFailClosed
+		var stopWatch func()
+		if !failClosed {
+			// Fail-open: за упавшим клиентом приберётся сторож. При
+			// fail-closed сторожа нет — блокировка держится до следующего
+			// запуска или `vpnclient -cleanup`.
+			if s, err := StartWatchdog(); err != nil {
+				log.Warn("сторож не запустился: после аварийного завершения "+
+					"снять блокировку можно командой vpnclient -cleanup", "err", err)
+			} else {
+				stopWatch = s
 			}
-			failClosed := cfg.KillSwitchFailClosed != nil && *cfg.KillSwitchFailClosed
-			var stopWatch func()
-			if !failClosed {
-				// Fail-open: за упавшим клиентом приберётся сторож. При
-				// fail-closed сторожа нет — блокировка держится до следующего
-				// запуска или `vpnclient -cleanup`.
-				if s, err := StartWatchdog(); err != nil {
-					log.Warn("сторож не запустился: после аварийного завершения "+
-						"снять блокировку можно командой vpnclient -cleanup", "err", err)
-				} else {
-					stopWatch = s
-				}
+		}
+		k, err := netsetup.KillSwitchArm(dev.Name(), fwmark, allow)
+		switch {
+		case err != nil && strict:
+			if stopWatch != nil {
+				stopWatch()
 			}
-			k, err := netsetup.KillSwitchArm(dev.Name(), fwmark, allow)
-			if err != nil {
-				if stopWatch != nil {
-					stopWatch()
-				}
-				sess.Close()
-				return fmt.Errorf("аварийное отключение: %w", err)
+			sess.Close()
+			return fmt.Errorf("аварийное отключение: %w", err)
+		case err != nil:
+			// Аварийное отключение не просили, поэтому не валим подключение:
+			// nf_tables может отсутствовать в ядре вовсе. Но лазейку
+			// называем прямо, а не прячем в отладку.
+			log.Warn("перехват nftables не встал: трафик сокета, привязанного "+
+				"к адаптеру, может уйти мимо туннеля", "err", err)
+			if stopWatch != nil {
+				stopWatch()
+				stopWatch = nil
 			}
+		default:
 			ks = k
 			defer func() {
 				if err := ks.Disarm(); err != nil {
@@ -148,7 +166,11 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 					stopWatch()
 				}
 			}()
-			log.Info("аварийное отключение включено", "fail_closed", failClosed)
+			if strict {
+				log.Info("аварийное отключение включено", "fail_closed", failClosed)
+			} else {
+				log.Info("перехват включён", "мимо туннеля", "только сам туннель и локальная сеть")
+			}
 		}
 	} else {
 		routes, _ := cfg.RoutePrefixes()

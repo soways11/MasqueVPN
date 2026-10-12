@@ -62,10 +62,24 @@ func TestKillSwitchLinuxWiring(t *testing.T) {
 	ksMustContain(t, src, "netsetup.KillSwitchArm(dev.Name(), fwmark, allow)", "блокировка поднимается после полного туннеля")
 	ksMustContain(t, src, "ks.Disarm()", "при штатном выходе блокировка снимается")
 
-	// Fail-open: сторож запускается ТОЛЬКО когда не fail-closed. Мутации:
-	// запускать всегда (fail-closed перестанет держать блокировку после краха)
-	// или не запускать никогда (fail-open перестанет прибираться).
-	ksMustContain(t, src, "failClosed := cfg.KillSwitchFailClosed != nil", "режим определяется флагом kill_switch_fail_closed")
+	// Таблица поднимается при полном туннеле БЕЗУСЛОВНО, а не по флагу
+	// kill_switch: иначе трафик сокета, привязанного к адаптеру
+	// (SO_BINDTODEVICE), уходит мимо туннеля — маршрутами это не
+	// закрывается (см. netsetup/fulltunnel_linux.go). Мутация: вернуть
+	// обрамление `if cfg.KillSwitch != nil && *cfg.KillSwitch {` вокруг
+	// KillSwitchArm — и лазейка откроется снова.
+	if strings.Contains(ksLive(src), "if cfg.KillSwitch != nil && *cfg.KillSwitch {") {
+		t.Error("поднятие таблицы снова под флагом kill_switch: при выключенном " +
+			"флаге трафик сокета, привязанного к адаптеру, уйдёт мимо туннеля")
+	}
+	ksMustContain(t, src, "strict := cfg.KillSwitch != nil", "флаг kill_switch решает строгость, а не сам факт перехвата")
+
+	// Fail-open: сторож запускается ТОЛЬКО когда не fail-closed, а
+	// fail-closed возможен лишь при явно включённом kill_switch — иначе
+	// выключенный флаг оставлял бы сеть закрытой после краха. Мутации:
+	// запускать сторожа всегда (fail-closed перестанет держать блокировку)
+	// или убрать strict из условия (сеть запрётся без спроса).
+	ksMustContain(t, src, "failClosed := strict && cfg.KillSwitchFailClosed != nil", "fail-closed — только при явном kill_switch")
 	ksMustContain(t, src, "if !failClosed {", "сторож — только при fail-open")
 	ksMustContain(t, src, "StartWatchdog()", "fail-open опирается на сторожа")
 

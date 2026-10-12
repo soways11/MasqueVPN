@@ -6,6 +6,8 @@ import (
 	"net/netip"
 	"testing"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestStructLayout — раскладка структур IP Helper API должна совпадать с
@@ -80,5 +82,81 @@ func TestSockaddr(t *testing.T) {
 	v6 := toSockaddr(netip.MustParseAddr("::1"))
 	if v6[0] != afINET6 || v6[23] != 1 {
 		t.Errorf("IPv6: % x", v6[:24])
+	}
+}
+
+// TestFilterPlanCoversPacketLayers — набор фильтров должен стоять и на слоях
+// ALE (решение при установлении соединения), и на пакетных (решение на каждый
+// пакет). Без пакетных слоёв блокировка не видит соединений, открытых ДО её
+// включения: они продолжают идти мимо туннеля открытым текстом.
+//
+// Мутация: убрать пакетные слои из плана — тест краснеет.
+func TestFilterPlanCoversPacketLayers(t *testing.T) {
+	const luid = 0x1234
+	allow := []netip.Prefix{
+		netip.MustParsePrefix("203.0.113.7/32"),
+		netip.MustParsePrefix("2001:db8::7/128"),
+	}
+	type counts struct{ permit, block int }
+	byLayer := map[windows.GUID]*counts{}
+	for _, spec := range append(filterPlan(luid, allow), packetFilterPlan(luid, allow)...) {
+		c := byLayer[spec.layer]
+		if c == nil {
+			c = &counts{}
+			byLayer[spec.layer] = c
+		}
+		switch spec.action {
+		case actionPermit:
+			c.permit++
+		case actionBlock:
+			c.block++
+		default:
+			t.Errorf("%s: неизвестное действие %#x", spec.name, spec.action)
+		}
+	}
+	for _, l := range []struct {
+		name  string
+		layer windows.GUID
+	}{
+		{"ALE v4", layerAleAuthConnectV4},
+		{"ALE v6", layerAleAuthConnectV6},
+		{"пакетный v4", layerOutboundIPPacketV4},
+		{"пакетный v6", layerOutboundIPPacketV6},
+	} {
+		c := byLayer[l.layer]
+		if c == nil {
+			t.Errorf("слой %s не покрыт фильтрами: трафик этого слоя не перехватывается", l.name)
+			continue
+		}
+		if c.block != 1 {
+			t.Errorf("слой %s: блокирующих фильтров %d, нужен ровно один", l.name, c.block)
+		}
+		// Разрешения: туннель, локальные диапазоны и один адрес из allow
+		// своей семьи. Без них блокировка отрезала бы и сам туннель.
+		if want := len(localPrefixes(l.layer == layerAleAuthConnectV6 || l.layer == layerOutboundIPPacketV6)) + 2; c.permit != want {
+			t.Errorf("слой %s: разрешающих фильтров %d, ожидалось %d", l.name, c.permit, want)
+		}
+	}
+}
+
+// TestPacketPlanMirrorsALE — пакетный набор повторяет набор ALE один в один,
+// только на других слоях: разрешения обязаны совпадать, иначе блокировка на
+// пакетном слое отрежет то, что ALE пропускает (например сам туннель).
+func TestPacketPlanMirrorsALE(t *testing.T) {
+	const luid = 0x1234
+	allow := []netip.Prefix{netip.MustParsePrefix("203.0.113.7/32")}
+	ale, pkt := filterPlan(luid, allow), packetFilterPlan(luid, allow)
+	if len(ale) != len(pkt) {
+		t.Fatalf("фильтров ALE %d, пакетных %d — наборы разошлись", len(ale), len(pkt))
+	}
+	for i := range ale {
+		if ale[i].name != pkt[i].name || ale[i].action != pkt[i].action ||
+			len(ale[i].conditions) != len(pkt[i].conditions) {
+			t.Errorf("фильтр %d: %q/%#x против %q/%#x", i,
+				ale[i].name, ale[i].action, pkt[i].name, pkt[i].action)
+		}
+		if ale[i].layer == pkt[i].layer {
+			t.Errorf("фильтр %d стоит на том же слое — пакетный набор не добавляет ничего", i)
+		}
 	}
 }

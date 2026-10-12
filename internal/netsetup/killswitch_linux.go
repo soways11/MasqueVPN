@@ -37,8 +37,21 @@ import (
 //                                 меткой (SO_MARK, см. MarkSocket), поэтому
 //                                 отдельно разрешать адрес сервера и резолверы
 //                                 не требуется — метка их покрывает;
-//   - ct state established,related — обратный путь и уже разрешённые потоки;
-//   - daddr в локальных подсетях и в kill_switch_allow.
+//   - daddr канальных адресов (broadcast, multicast, link-local), локальных
+//     подсетей и kill_switch_allow.
+//
+// Исключений по состоянию соединения (ct state established) здесь нет
+// сознательно — через них наружу уходил поток, открытый до подключения
+// туннеля; разбор в addRules.
+//
+// # Двойная служба: перехват и аварийное отключение
+//
+// Эта же таблица закрывает единственную лазейку полного туннеля, которую не
+// закрыть маршрутами: сокет, привязанный к физическому интерфейсу
+// (SO_BINDTODEVICE), ядро отправляет на этот интерфейс само, не спрашивая
+// таблицы маршрутизации (см. fulltunnel_linux.go, «Чего маршрутизация не
+// может»). Поэтому клиент поднимает таблицу при полном туннеле ВСЕГДА, а флаг
+// kill_switch решает другое: что будет ПОСЛЕ краха клиента (см. «Fail-open»).
 //
 // # Fail-open
 //
@@ -147,16 +160,36 @@ func (k *KillSwitch) addRules(c *nftables.Conn, t *nftables.Table, ch *nftables.
 		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.NativeEndian.PutUint32(k.mark)},
 	)
-	// Уже установленные и связанные соединения.
-	est := uint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED)
-	accept(
-		&expr.Ct{Register: 1, Key: expr.CtKeySTATE},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4,
-			Mask: binaryutil.NativeEndian.PutUint32(est), Xor: []byte{0, 0, 0, 0}},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{0, 0, 0, 0}},
-	)
-	// Локальные подсети (LAN, link-local) и явно разрешённые адреса.
-	for _, p := range append(localSubnets(k.iface), allow...) {
+	// Исключения по состоянию соединения (ct state established,related)
+	// здесь НЕТ, и это решение, а не упущение.
+	//
+	// Правило «established — можно» пропускало наружу поток, открытый ДО
+	// подключения туннеля: он продолжал идти мимо туннеля открытым текстом,
+	// пока весь остальной трафик уже перехвачен. Ровно эта дырка известна на
+	// Windows (WFP ALE_AUTH_CONNECT не видит уже открытых соединений), и на
+	// Linux она была такой же: сквозной тест TestNothingEscapesTunnel ловит
+	// её на соединении, привязанном к физическому интерфейсу.
+	//
+	// Сузить правило до «ответы по входящим соединениям» (ct direction
+	// reply) не выходит, и это стоит знать: conntrack в этом пространстве
+	// имён начинает следить за потоками ВМЕСТЕ с нашей таблицей — до неё
+	// отслеживать было некому. Для давно открытого соединения он создаёт
+	// запись по первому увиденному пакету, а это ответ сервера, то есть
+	// «входящий»: наши собственные подтверждения оказываются в направлении
+	// reply и правило их пропускает. Проверено тем же тестом — утечка
+	// оставалась.
+	//
+	// Плата: пока туннель поднят, машина не отвечает наружу по соединениям,
+	// которые начали СНАРУЖЕ на её физический адрес (служба, открытая в
+	// интернет, сессия SSH извне). Под полным туннелем это и значит
+	// «весь трафик через туннель»; в локальной сети всё работает — её
+	// подсети разрешены ниже.
+	//
+	// Канальные адреса — широковещательные, multicast и link-local. За
+	// пределы сегмента они не уходят, то есть утечкой быть не могут, а без
+	// них ломается нужное: продление аренды DHCP (255.255.255.255), поиск
+	// соседей IPv6 и mDNS. На Windows тот же список (см. localPrefixes).
+	for _, p := range append(append(linkScopePrefixes(), localSubnets(k.iface)...), allow...) {
 		if m := daddrMatch(p); m != nil {
 			accept(m...)
 		}
@@ -183,6 +216,26 @@ func daddrMatch(p netip.Prefix) []expr.Any {
 		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: l, Mask: mask, Xor: make([]byte, l)},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: p.Addr().AsSlice()},
 	}
+}
+
+// linkScopePrefixes — адреса, которые не уходят за пределы канала:
+// широковещательные, multicast и link-local. Разрешены потому, что утечкой
+// быть не могут, а без них ломается продление аренды DHCP, поиск соседей
+// IPv6 и mDNS. Список повторяет Windows (killswitch_windows.go,
+// localPrefixes).
+func linkScopePrefixes() []netip.Prefix {
+	out := []netip.Prefix{
+		netip.MustParsePrefix("255.255.255.255/32"), // широковещательный
+		netip.MustParsePrefix("224.0.0.0/4"),        // multicast
+		netip.MustParsePrefix("169.254.0.0/16"),     // link-local
+	}
+	if IPv6Available() {
+		out = append(out,
+			netip.MustParsePrefix("fe80::/10"), // link-local
+			netip.MustParsePrefix("ff00::/8"),  // multicast
+		)
+	}
+	return out
 }
 
 // localSubnets — напрямую подключённые подсети всех интерфейсов, кроме
