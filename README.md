@@ -35,40 +35,91 @@ damage нельзя.
 
 Подробно — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); репозиторий и релизы — [docs/github.md](docs/github.md).
 
-## Сборка
+## Установка
 
-Нужен Go 1.24+.
+Сервер — Linux-VPS с systemd (Ubuntu/Debian, amd64 или arm64), root и
+домен с A-записью на IP сервера. Команды выполняются на сервере под root.
 
-```sh
-go build ./...                                          # всё
-go test ./...                                           # тесты
-sudo go test -tags e2e ./test/e2e/                      # сквозной стенд (root, netns)
-```
-
-| что | команда | результат |
-|---|---|---|
-| установщик Windows | `sh deploy/windows/build-installer.sh 1.0.0` (нужен `nsis`) | `dist/masquevpn-setup-1.0.0.exe` |
-| пакет Linux | `sh deploy/linux/build-deb.sh amd64 1.0.0` | `dist/masquevpn_1.0.0_amd64.deb` |
-| сервер для VPS | `VERSION=1.0.0 sh deploy/vps/build.sh` | `dist/masquevpn-vps.tar.gz` |
-| APK | `mobile/build-apk.ps1` (Windows) или `mobile/build-apk.sh` | см. [docs/android-apk.md](docs/android-apk.md) |
-
-Версия сборки: `vpnserver version`, `masquevpn-cli -version`; окна и сервер
-пишут её в журнал при запуске.
-
-Релиз собирает GitHub Actions по тегу `v*` — черновиком, со всеми
-файлами выше и `SHA256SUMS` (`.github/workflows/release.yml`).
-
-## Сервер
+**1. Скачать последний релиз**
 
 ```sh
-VERSION=1.0.0 sh deploy/vps/build.sh
-scp dist/masquevpn-vps.tar.gz root@СЕРВЕР:/tmp/
-ssh root@СЕРВЕР 'cd /tmp && tar xzf masquevpn-vps.tar.gz && cd masquevpn-vps && sh install.sh ДОМЕН почта@пример'
+curl -fsSL https://github.com/soways11/MasqueVPN/releases/latest/download/masquevpn-vps.tar.gz | tar xz -C /tmp
 ```
 
-Подробности и режим «рядом с чужим веб-сервером» — `deploy/vps/README.txt`.
-Сервер, поставленный до переименования проекта (govpn), install.sh
-переносит сам, сохранив копию данных.
+**2. Проверить домен** — оба адреса должны совпасть:
+
+```sh
+getent hosts ДОМЕН; curl -4 -s ifconfig.me; echo
+```
+
+**3. Установить**
+
+Рядом с веб-сервером (x-ui, nginx — TCP/443 занят): masquevpn берёт только
+UDP и готовый сертификат из файлов, продление подхватывает сам.
+
+```sh
+sh /tmp/masquevpn-vps/install.sh ДОМЕН \
+  --cert /root/cert/ДОМЕН/fullchain.pem \
+  --key  /root/cert/ДОМЕН/privkey.pem \
+  --ports 8443,2053,2083
+```
+
+Отдельный сервер (TCP/443 свободен): сертификат Let's Encrypt masquevpn
+выпустит сам — сначала тестовый, затем боевой:
+
+```sh
+sh /tmp/masquevpn-vps/install.sh ДОМЕН почта@пример
+rm /etc/masquevpn/server.json && sh /tmp/masquevpn-vps/install.sh ДОМЕН почта@пример --production
+```
+
+`--ports` — UDP-порты: первый основной, остальные запасные (клиент
+переключается сам, если провайдер режет порт). Без него —
+443, 8443, 2053, 2083, 2087, 2096.
+
+**4. Проверить**
+
+```sh
+systemctl status masquevpn --no-pager | head -5
+ss -lnup | grep vpnserver
+```
+
+Если у хостера есть свой файрвол в панели — открыть там эти UDP-порты
+(ufw/firewalld на машине скрипт открывает сам).
+
+**5. Выдать доступ**
+
+Первый клиент заведён при установке:
+
+```sh
+cat /etc/masquevpn/client-first.link
+```
+
+Следующие — по одному на устройство:
+
+```sh
+vpnserver clients add -config /etc/masquevpn/server.json -name Телефон -server ДОМЕН:8443 -out /root/phone.json
+cat /root/phone.link
+```
+
+Ссылку `masquevpn://…` вставить в клиенте: «+» → «Вставить» → «Добавить».
+Клиенты для Windows, Linux и Android — в
+[Releases](https://github.com/soways11/MasqueVPN/releases/latest).
+
+**Обслуживание**
+
+| что | команда |
+|---|---|
+| журнал | `journalctl -u masquevpn -f` |
+| клиенты | `vpnserver clients list -config /etc/masquevpn/server.json` |
+| отключить клиента | `vpnserver clients disable -config /etc/masquevpn/server.json -id ID` (ID — из `list`) |
+| копия реестра | `vpnserver clients backup -config /etc/masquevpn/server.json -out /root/clients-backup.json` |
+| диагностика | `sh /tmp/masquevpn-vps/diag.sh` |
+| обновить | шаги 1 и 3 заново — настройки и клиенты сохраняются |
+| удалить | `sh /tmp/masquevpn-vps/uninstall.sh` |
+
+Подробности — `deploy/vps/README.txt`. Сборка из исходников, тесты и
+выпуск релиза — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) и
+[docs/github.md](docs/github.md).
 
 ## Безопасность
 
