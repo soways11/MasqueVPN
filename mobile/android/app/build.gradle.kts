@@ -17,7 +17,7 @@ val releaseSigning = Properties().apply {
 // Версия приложения. В релизе (GitHub Actions) приходит из тега:
 //   ./gradlew assembleRelease -PversionName=1.0.0
 // Локально — значение ниже; build-apk.ps1/.sh его не меняют.
-val appVersion = (project.findProperty("versionName") as String?) ?: "1.0.0"
+val appVersion = (project.findProperty("versionName") as String?) ?: "1.1.0"
 
 // versionCode выводится из версии: 1.2.3 → 1020300. Android не ставит APK с
 // МЕНЬШИМ versionCode поверх большего, поэтому номер обязан расти вместе с
