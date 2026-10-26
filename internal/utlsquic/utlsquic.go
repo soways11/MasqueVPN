@@ -72,7 +72,15 @@ const (
 	// несёт и то, чего в uquic нет вовсе: постквантовый key_share,
 	// trust_anchors, новый номер ALPS. ECH из записи выбрасывается: его режет
 	// DPI, а проекту он не нужен — SNI открыт (см. Fingerprint.Spec).
-	ParrotChrome153     = "chrome-153"
+	ParrotChrome153 = "chrome-153"
+	// ParrotFirefox146 — отпечаток, снятый с живого Firefox 146 (Linux)
+	// утилитой fpcapture и встроенный в бинарник. Стек Gecko/NSS, а не
+	// BoringSSL: другой набор расширений (record_size_limit,
+	// extended_master_secret, delegated_credentials, renegotiation_info) и
+	// другой ClientHello — то есть на проводе он реально отличается от Chrome,
+	// тогда как Chrome/Yandex/Edge различить нельзя. ECH и домен съёма из SNI
+	// вычищены при встраивании (см. Fingerprint.Spec).
+	ParrotFirefox146    = "firefox-146"
 	ParrotChrome115     = "chrome-115"
 	ParrotChrome115IPv6 = "chrome-115-ipv6"
 	ParrotFirefox116    = "firefox-116"
@@ -90,22 +98,39 @@ const DefaultParrot = ParrotChrome153
 //go:embed profiles/chrome-153.json
 var chrome153Profile []byte
 
+//go:embed profiles/firefox-146.json
+var firefox146Profile []byte
+
 // Available сообщает, собран ли бинарник с поддержкой uTLS.
 func Available() bool { return true }
 
 // Parrots возвращает список встроенных профилей отпечатка.
 func Parrots() []string {
-	return []string{ParrotChrome153, ParrotChrome115, ParrotChrome115IPv6, ParrotFirefox116, ParrotChrome115NoGREASE}
+	return []string{ParrotChrome153, ParrotFirefox146, ParrotChrome115, ParrotChrome115IPv6, ParrotFirefox116, ParrotChrome115NoGREASE}
+}
+
+// embeddedProfiles — снятые с живых браузеров профили, встроенные в бинарник
+// (в отличие от профилей ниже, собранных из кода uquic). Пустое имя — профиль
+// по умолчанию.
+func embeddedProfileJSON(name string) ([]byte, bool) {
+	switch name {
+	case "", ParrotChrome153:
+		return chrome153Profile, true
+	case ParrotFirefox146:
+		return firefox146Profile, true
+	}
+	return nil, false
 }
 
 // embeddedFingerprint возвращает встроенную запись отпечатка, если профиль с
 // таким именем снят с браузера, а не собран из кода uquic.
 func embeddedFingerprint(name string) (*Fingerprint, bool) {
-	if name != "" && name != ParrotChrome153 {
+	raw, ok := embeddedProfileJSON(name)
+	if !ok {
 		return nil, false
 	}
 	var fp Fingerprint
-	if err := json.Unmarshal(chrome153Profile, &fp); err != nil {
+	if err := json.Unmarshal(raw, &fp); err != nil {
 		return nil, false
 	}
 	return &fp, true
@@ -121,9 +146,13 @@ func ValidateParrot(name string) error {
 func parrotSpec(name string) (uquic.QUICSpec, error) {
 	// Снятые отпечатки собираются из записи — заново на каждый дозвон.
 	if fp, ok := embeddedFingerprint(name); ok {
+		shown := name
+		if shown == "" {
+			shown = DefaultParrot
+		}
 		spec, err := fp.Spec()
 		if err != nil {
-			return uquic.QUICSpec{}, fmt.Errorf("utlsquic: встроенный профиль %s: %w", ParrotChrome153, err)
+			return uquic.QUICSpec{}, fmt.Errorf("utlsquic: встроенный профиль %s: %w", shown, err)
 		}
 		return *spec, nil
 	}

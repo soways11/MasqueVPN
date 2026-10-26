@@ -27,6 +27,7 @@ var ErrNotBuilt = errors.New("utlsquic: собрано без тега utls (п�
 // Профили отпечатка (значения Config.Parrot) — те же имена, что и в utls-сборке.
 const (
 	ParrotChrome153     = "chrome-153"
+	ParrotFirefox146    = "firefox-146"
 	ParrotChrome115     = "chrome-115"
 	ParrotChrome115IPv6 = "chrome-115-ipv6"
 	ParrotFirefox116    = "firefox-116"

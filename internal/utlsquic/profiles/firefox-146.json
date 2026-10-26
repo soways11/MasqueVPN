@@ -1,0 +1,124 @@
+{
+  "source": "Firefox 146, Linux (снят fpcapture; ECH удалён — его режет DPI; SNI вычищен)",
+  "captured_at": "2026-10-26T17:44:00Z",
+  "datagram_size": 1252,
+  "src_conn_id_len": 3,
+  "dest_conn_id_len": 8,
+  "packet_number_len": 1,
+  "init_packet_number": 5,
+  "cipher_suites": [
+    4865,
+    4867,
+    4866
+  ],
+  "extensions": [
+    {
+      "id": 43,
+      "data": "AgME"
+    },
+    {
+      "id": 34,
+      "data": "AAgEAwUDBgMCAw=="
+    },
+    {
+      "id": 27,
+      "data": "BgABAAMAAg=="
+    },
+    {
+      "id": 51,
+      "data": "BS0R7ATA+CIoNHU5o+VbkWJlqjZXAYw+yjh3wXwP0mYmGRlakVYq53ytiZZZ6EKorXo1OTtf6cDNo4oaskWs1WhwhxRTiMLBjJSUcQVkkDM/DXIA1UseYrhRQxF2bhtoDSJqzHslydgXF3ZSXZG2jIR/ETrFEynCEChGK0nE/yM1nYhOkJBjwaQPotAE3COG7zugAKYeE6GNw6Yr0nkracUWnagJqik/osHHCJgZzkleuNicsHAxynJKPFFaJJixWTR7sOo2bkCXzpyUY7ytjkrEotmg5dBL9pxObmuJBYlyqTob9AkdtYXLgsKYOMJXZve4jxOep9svdUNJfKFI6akrRFVkmtQFG7aB97J8EMHKslKp/1o1WswchfuCgHBcf7eJCoyQBFtTpTfCkwXBbaGtCZE0YQC5CRVIHBsE+TYxcWtX3zWfDmxI8LViwlgTvLRWPFxlOTQIqXGZg2cTFDil5deOZZtJiWm/8pM0p1NNyofF6AS03rBRvsec00gXzKiTPfqLK9qUPHWfagrJvlN/cFcjQotdymSwmTChPEFduufAnKWqjOVSxVpPl0SsVgOXwTLNvjwFzeFN4HVgKqhdx6Q4drJPk7VvuQQZlmJuP7AY6HIVwpMnQoyu3Ig5HFh3SzJEmuug5Dawanml0kQe8Pw/6JM68BMo5BhShdUV/SKTDbByNCyQYcG/v5mfTbFrYyjIqdRe16wmZ9JWuqQw1CNKF9MdNsBlUMGhtZpm7MARcmluUrwwbHOykWE8wpuW5ep20DWS/kBz7BoKD5aXTgNUAIpiKTMYIPpHQsCJo+tUXymMCMN14bg3ghWTQuyT9rcBv4pwTCKOJ+g+1tx+MmS1vnhH9ySfX8S30Cc9pngNu2SX/NY32kxZ7IqN2Nw4HUIJxgGsKiQQ02l276FUV8QVZazC6Rai18k+FcQqW1SydAg9kOdkICCiDwJeVqWmhMOMtykUZ7G+gYpLkbk3d0ZngyAO1EsYnWGy6hnPRjKCGiV4dNm+GZDAWeckjUg/evmEYLBIFJYarJqVV5RFUoks6hrPlsBeICSG0nsNLvDKZzYshsJnMluXLYVdKPYk7MtVQtcYmHqt8fVLLJK18MOjEJoQqeDCaog8lfoT3DUfCbUt9HSIkPex3cuWv3q7iMSblzquq6GATwWttSOnSzEBzBOR+JxoCpZEvqVYZ7YJFBGYQNO7zfKsg+m60MFpsBGf4Qu+NXmbESQxuaFCsfwbkplL+TAe6pYIADs4FCmeHKCpKcVZjjFkMloirPWog4pagWi9gQqs+WM50BwK51tuU3mYcbTAD0s9D4hd5UCV+KIHMMHPy1eIBuF8Ttk+Lja/MEsAFOxZqzV/l+ReeOF47GwamUITjZdRfVSyJfkRAbAVDXcMlnw3zQDOEKBljKYhSNd4EAl+wpHPpZFwX3UnYTkFZICdOtEJnuU7zBafEEIxGtsljId8HfGH0FJzNcy8pBdmsNRlhFoZBxMR0ZOucqw1wmsvPaJ7F+Ih/jtE4kNuXYdpt0glEYgsCOzCKtyNyT++8AJE0YPPedn+wyDvnbifdhcONzjMNrNAkzAdk9d8KaJOp2g1Cl82xkp5ZQU8sXtC9Iy9ZefTl/3O6Y9dCQAdACB8KaJOp2g1Cl82xkp5ZQU8sXtC9Iy9ZefTl/3O6Y9dCQAXAEEER1APHZT6zIffZEmmJj3mDtwUsGMvwsT6dosLDSo2bDLpFETl1eYJ3o78bAo6rkrrbmYXagiooE081EFHllg1Vw=="
+    },
+    {
+      "id": 28,
+      "data": "QAE="
+    },
+    {
+      "id": 23
+    },
+    {
+      "id": 0
+    },
+    {
+      "id": 10,
+      "data": "AAoR7AAdABcAGAAZ"
+    },
+    {
+      "id": 13,
+      "data": "ABYEAwUDBgMCAwgECAUIBgQBBQEGAQIB"
+    },
+    {
+      "id": 45,
+      "data": "AQE="
+    },
+    {
+      "id": 16,
+      "data": "AAMCaDM="
+    },
+    {
+      "id": 5,
+      "data": "AQAAAAA="
+    },
+    {
+      "id": 65281,
+      "data": "AA=="
+    },
+    {
+      "id": 57,
+      "data": "AQSAAHUwBASBgAAABQSAwAAABgSAEAAABwSAEAAACAEQCQEQCwEUDgEIDwOuTzIRDAAAAAEamppaAAAAAcAAAAD/At4aAkPoIAJF3A=="
+    }
+  ],
+  "transport_params": [
+    {
+      "id": 1,
+      "value": "gAB1MA=="
+    },
+    {
+      "id": 4,
+      "value": "gYAAAA=="
+    },
+    {
+      "id": 5,
+      "value": "gMAAAA=="
+    },
+    {
+      "id": 6,
+      "value": "gBAAAA=="
+    },
+    {
+      "id": 7,
+      "value": "gBAAAA=="
+    },
+    {
+      "id": 8,
+      "value": "EA=="
+    },
+    {
+      "id": 9,
+      "value": "EA=="
+    },
+    {
+      "id": 11,
+      "value": "FA=="
+    },
+    {
+      "id": 14,
+      "value": "CA=="
+    },
+    {
+      "id": 15,
+      "value": "rk8y"
+    },
+    {
+      "id": 17,
+      "value": "AAAAARqamloAAAAB"
+    },
+    {
+      "id": 4278378010,
+      "value": "Q+g="
+    },
+    {
+      "id": 32,
+      "value": "Rdw="
+    }
+  ]
+}
