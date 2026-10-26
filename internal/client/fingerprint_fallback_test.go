@@ -7,12 +7,14 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/soways11/masquevpn/internal/masque"
+	"github.com/soways11/masquevpn/internal/utlsquic"
 )
 
 // fpScript подменяет попытку дозвона и смотрит, каким профилем она идёт
@@ -174,6 +176,49 @@ func TestFingerprintPoolWithoutMemory(t *testing.T) {
 	}
 	if got := s.distinct(); strings.Join(got, ",") != "chrome-153,firefox-116" {
 		t.Fatalf("без памяти fallback не сработал: %v", got)
+	}
+}
+
+// TestDefaultPoolWhenUnset — при transport=utls и без явных
+// parrot/fingerprint_file/fingerprint_pool клиент использует пул по умолчанию
+// (Chromium + Firefox) с выбором по здоровью.
+func TestDefaultPoolWhenUnset(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.Server = "192.0.2.10:8443"
+	cfg.ServerName = "example.test"
+	cfg.Transport = "utls" // parrot / fingerprint_file / fingerprint_pool не заданы
+	d, err := NewDialer(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(d.pool, utlsquic.DefaultPool) {
+		t.Fatalf("дефолтный пул не применился: %v (ожидался %v)", d.pool, utlsquic.DefaultPool)
+	}
+	// И он рабочий: первый профиль молчит — уходим на второй.
+	s := &fpScript{blocked: map[string]bool{utlsquic.DefaultPool[0]: true}}
+	s.d = d
+	d.attempt = s.attempt
+	if _, err := d.Dial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := s.distinct()
+	if len(got) < 2 || got[0] != utlsquic.DefaultPool[0] || got[1] != utlsquic.DefaultPool[1] {
+		t.Fatalf("fallback дефолтного пула не сработал: %v", got)
+	}
+}
+
+// TestExplicitParrotDisablesPool — явный parrot отключает дефолтный пул
+// (пользователь намеренно закрепил один профиль).
+func TestExplicitParrotDisablesPool(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.Transport = "utls"
+	cfg.Parrot = "chrome-153"
+	d, err := NewDialer(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.pool) != 0 {
+		t.Fatalf("явный parrot не отключил дефолтный пул: %v", d.pool)
 	}
 }
 

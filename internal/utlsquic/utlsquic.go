@@ -95,6 +95,14 @@ const (
 // себе примета. Умолчанием служит снятый отпечаток.
 const DefaultParrot = ParrotChrome153
 
+// DefaultPool — профили отпечатка по умолчанию для выбора по здоровью, когда
+// клиент не задал ни fingerprint_file, ни fingerprint_pool, ни явный parrot.
+// Два различимых на проводе отпечатка: Chromium (chrome-153) и Firefox
+// (firefox-146). Chrome/Yandex/Edge между собой наблюдатель не различает (все
+// BoringSSL), поэтому второго Chromium в пуле нет — он не добавил бы
+// разнообразия.
+var DefaultPool = []string{ParrotChrome153, ParrotFirefox146}
+
 //go:embed profiles/chrome-153.json
 var chrome153Profile []byte
 

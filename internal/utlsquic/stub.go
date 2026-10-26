@@ -36,6 +36,11 @@ const (
 // DefaultParrot — профиль по умолчанию.
 const DefaultParrot = ParrotChrome153
 
+// DefaultPool — профили по умолчанию для выбора по здоровью (те же имена, что
+// и в utls-сборке). В сборке без тега utls пул не используется (транспорт не
+// utls), но имя должно существовать для компиляции вызывающего кода.
+var DefaultPool = []string{ParrotChrome153, ParrotFirefox146}
+
 // Available сообщает, собран ли бинарник с поддержкой uTLS.
 func Available() bool { return false }
 

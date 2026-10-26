@@ -177,6 +177,11 @@ func NewDialer(cfg *config.Client, opt Options) (*Dialer, error) {
 			}
 		}
 		d.pool = append([]string(nil), cfg.FingerprintPool...)
+	} else if cfg.Transport == "utls" && cfg.FingerprintFile == "" && cfg.Parrot == "" {
+		// Ничего не задано явно — пул по умолчанию (Chromium + Firefox) с
+		// выбором по здоровью. Явный parrot/fingerprint_pool/fingerprint_file
+		// это поведение отключают.
+		d.pool = append([]string(nil), utlsquic.DefaultPool...)
 	}
 	if d.proto, err = config.Protocol(cfg.Protocol); err != nil {
 		return nil, err
