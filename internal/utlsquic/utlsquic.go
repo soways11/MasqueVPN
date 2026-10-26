@@ -111,6 +111,13 @@ func embeddedFingerprint(name string) (*Fingerprint, bool) {
 	return &fp, true
 }
 
+// ValidateParrot проверяет, что профиль с таким именем существует и собирается
+// (имя из fingerprint_pool). Пустое имя означает профиль по умолчанию.
+func ValidateParrot(name string) error {
+	_, err := parrotSpec(name)
+	return err
+}
+
 func parrotSpec(name string) (uquic.QUICSpec, error) {
 	// Снятые отпечатки собираются из записи — заново на каждый дозвон.
 	if fp, ok := embeddedFingerprint(name); ok {

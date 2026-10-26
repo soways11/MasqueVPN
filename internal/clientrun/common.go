@@ -156,3 +156,10 @@ func StartDNSCover(ctx context.Context, cfg *config.Client, protect func(syscall
 func portMemory() client.PortMemory {
 	return client.FilePortMemory(filepath.Join(config.DataDir(), client.PortsFile))
 }
+
+// fingerprintMemory — где клиент помнит здоровье профилей отпечатка между
+// запусками (рядом с профилями). Действует при заданном fingerprint_pool.
+// См. client.FingerprintMemory.
+func fingerprintMemory() client.FingerprintMemory {
+	return client.FileFingerprintMemory(filepath.Join(config.DataDir(), client.FingerprintsFile))
+}

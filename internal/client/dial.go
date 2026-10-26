@@ -57,6 +57,10 @@ type Options struct {
 	// Ports — где помнить удачный порт сервера между запусками (см.
 	// PortMemory). nil — помнить только до конца процесса.
 	Ports PortMemory
+	// Fingerprints — где помнить здоровье профилей отпечатка между запусками
+	// (см. FingerprintMemory). Действует только при заданном fingerprint_pool.
+	// nil — помнить только до конца процесса (пул всё равно работает).
+	Fingerprints FingerprintMemory
 }
 
 func deviceID(opt Options) string {
@@ -76,6 +80,12 @@ type Dialer struct {
 	spec  any
 	proto string
 	host  string
+	// pool — имена профилей отпечатка для выбора по здоровью (fingerprint_pool).
+	// Пусто — обычный путь с одним профилем (cfg.Parrot или встроенный).
+	pool []string
+	// activeParrot — профиль, которым идёт текущий дозвон (устанавливается перед
+	// перебором портов в режиме пула). Пусто — обычный путь (cfg.Parrot + spec).
+	activeParrot atomic.Value // string
 	// ports — порты сервера в порядке перебора (см. config.SplitServer);
 	// cur — номер последнего ответившего: следующий дозвон начинается с него.
 	ports    []string
@@ -151,6 +161,22 @@ func NewDialer(cfg *config.Client, opt Options) (*Dialer, error) {
 		if d.spec, err = utlsquic.LoadSpec(cfg.FingerprintFile); err != nil {
 			return nil, fmt.Errorf("fingerprint_file: %w", err)
 		}
+	}
+	if len(cfg.FingerprintPool) > 0 {
+		if cfg.Transport != "utls" {
+			return nil, errors.New("fingerprint_pool требует transport=utls")
+		}
+		if cfg.FingerprintFile != "" {
+			return nil, errors.New("fingerprint_pool и fingerprint_file несовместимы")
+		}
+		// Имена профилей проверяются сразу: негодное имя должно отвергаться при
+		// чтении конфигурации, а не через сутки при неудачном дозвоне.
+		for _, name := range cfg.FingerprintPool {
+			if err := utlsquic.ValidateParrot(name); err != nil {
+				return nil, fmt.Errorf("fingerprint_pool: %w", err)
+			}
+		}
+		d.pool = append([]string(nil), cfg.FingerprintPool...)
 	}
 	if d.proto, err = config.Protocol(cfg.Protocol); err != nil {
 		return nil, err
@@ -346,6 +372,48 @@ func (d *Dialer) Dial(ctx context.Context) (*masque.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Обычный путь: один профиль (cfg.Parrot или встроенный) — перебор портов.
+	if len(d.pool) == 0 {
+		return d.dialPorts(ctx, ip)
+	}
+	// Пул: профиль выбирается по здоровью. Удачный идёт первым, выпавшие на
+	// кулдаун пропускаются. Для каждого профиля — обычный перебор портов.
+	// «Молчат все порты» (PortsError) значит «на проводе не прошло» — повод
+	// сменить профиль; ответ сервера (404, чужой серт, неверный ключ) другой
+	// профиль не исправит, поэтому возвращается сразу.
+	order := d.fingerprintOrder()
+	var lastErr error
+	for i, fp := range order {
+		d.activeParrot.Store(fp)
+		c, err := d.dialPorts(ctx, ip)
+		if err == nil {
+			if d.opt.Fingerprints != nil {
+				d.opt.Fingerprints.RememberGood(d.host, fp)
+			}
+			return c, nil
+		}
+		var pe *PortsError
+		if ctx.Err() != nil || !errors.As(err, &pe) {
+			return nil, err
+		}
+		if d.opt.Fingerprints != nil {
+			d.opt.Fingerprints.Penalize(d.host, fp, time.Now())
+		}
+		lastErr = err
+		if i < len(order)-1 {
+			d.log.Warn("профиль "+fp+" не прошёл ни на одном порту — пробую следующий",
+				"fingerprint", fp, "next", order[i+1])
+		} else {
+			d.log.Warn("ни один профиль отпечатка не прошёл", "fingerprint", fp)
+		}
+	}
+	return nil, lastErr
+}
+
+// dialPorts перебирает порты сервера активным профилем отпечатка. Начинает с
+// порта, ответившего в прошлый раз, и идёт по кругу, пока какой-нибудь не
+// ответит; на следующий переходит только при молчании (см. unreachable).
+func (d *Dialer) dialPorts(ctx context.Context, ip string) (*masque.Conn, error) {
 	n := len(d.ports)
 	start := int(d.cur.Load()) % n
 	var silent []string
@@ -380,15 +448,75 @@ func (d *Dialer) Dial(ctx context.Context) (*masque.Conn, error) {
 	return nil, errors.New("client: нет портов сервера") // недостижимо: SplitServer даёт хотя бы один
 }
 
+// fingerprintOrder — порядок перебора профилей: удачный первым, затем пул как
+// задан; профили на кулдауне отбрасываются. Если на кулдауне разом все — не
+// залипаем и возвращаем весь порядок (лучше попробовать заблокированный, чем
+// не подключиться вовсе).
+func (d *Dialer) fingerprintOrder() []string {
+	now := time.Now()
+	good := ""
+	enabled := func(string) bool { return true }
+	if m := d.opt.Fingerprints; m != nil {
+		good = m.Good(d.host)
+		enabled = func(n string) bool { return m.Enabled(d.host, n, now) }
+	}
+	// Базовый порядок: удачный профиль первым (если он ещё в пуле), затем пул.
+	base := make([]string, 0, len(d.pool)+1)
+	inBase := map[string]bool{}
+	add := func(n string) {
+		if n != "" && containsStr(d.pool, n) && !inBase[n] {
+			base = append(base, n)
+			inBase[n] = true
+		}
+	}
+	add(good)
+	for _, n := range d.pool {
+		add(n)
+	}
+	var on []string
+	for _, n := range base {
+		if enabled(n) {
+			on = append(on, n)
+		}
+	}
+	if len(on) == 0 {
+		return base
+	}
+	return on
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 // perPortTimeout — сколько ждать рукопожатия на одном порту, когда впереди
 // есть другие. Сам QUIC сдаётся через 5 с тишины; предел чуть больше нужен
 // на случай, когда пакеты идут, а рукопожатие всё не завершается.
 const perPortTimeout = 8 * time.Second
 
+// maxConnectTimeout — потолок срока подключения. С пулом профилей перебор
+// идёт порты×профили, и без потолка выключенный сервер висел бы минутами.
+const maxConnectTimeout = 120 * time.Second
+
+// poolSize — число профилей в переборе (1, если пул не задан).
+func (d *Dialer) poolSize() int {
+	if len(d.pool) == 0 {
+		return 1
+	}
+	return len(d.pool)
+}
+
 // ConnectTimeout — сколько отводить на первое подключение: столько, чтобы
-// успеть перебрать все порты. Вызывающие ставят этот срок на OpenSession.
+// успеть перебрать все порты (и профили пула). Вызывающие ставят этот срок на
+// OpenSession.
 func (d *Dialer) ConnectTimeout() time.Duration {
-	return max(30*time.Second, time.Duration(len(d.ports))*perPortTimeout+10*time.Second)
+	t := time.Duration(len(d.ports))*perPortTimeout*time.Duration(d.poolSize()) + 10*time.Second
+	return min(maxConnectTimeout, max(30*time.Second, t))
 }
 
 // stall — сторож сессии признал путь мёртвым (см. session.Config.StallAfter):
@@ -537,12 +665,23 @@ func (d *Dialer) legacyRetry(err error) (http.Header, bool) {
 	return hdr, true
 }
 
+// effectiveFingerprint — профиль для текущего дозвона. В режиме пула это
+// выбранный профиль (activeParrot, CustomSpec не нужен). Иначе — обычный путь:
+// cfg.Parrot и снятый файлом spec, если он задан.
+func (d *Dialer) effectiveFingerprint() (parrot string, spec any) {
+	if fp, _ := d.activeParrot.Load().(string); fp != "" {
+		return fp, nil
+	}
+	return d.cfg.Parrot, d.spec
+}
+
 // dialTransport поднимает сессию выбранным транспортом.
 func (d *Dialer) dialTransport(ctx context.Context, addr, port string, hdr http.Header,
 	shaping *masque.Shaping, packing *masque.Packing) (*masque.Conn, error) {
 
 	var c *masque.Conn
 	var err error
+	parrot, spec := d.effectiveFingerprint()
 	switch d.cfg.Transport {
 	case "utls":
 		c, err = utlsquic.Dial(ctx, utlsquic.Config{
@@ -555,8 +694,8 @@ func (d *Dialer) dialTransport(ctx context.Context, addr, port string, hdr http.
 			Shaping:       shaping,
 			Packing:       packing,
 			CoverBrowsing: d.coverBrowsing(),
-			Parrot:        d.cfg.Parrot,
-			CustomSpec:    d.spec,
+			Parrot:        parrot,
+			CustomSpec:    spec,
 			Protocol:      d.proto,
 			ListenUDP:     d.listenUDP,
 		})
@@ -625,8 +764,9 @@ const minIPv6MTU = 1280
 func (d *Dialer) OpenSession(ctx context.Context, onRotate func(old, new []netip.Prefix)) (*session.Session, error) {
 	return session.Open(ctx, session.Config{
 		Dial: d.Dial,
-		// Переподключение и ротация — тот же перебор портов, срок нужен на все.
-		DialTimeout: max(15*time.Second, time.Duration(len(d.ports))*perPortTimeout+7*time.Second),
+		// Переподключение и ротация — тот же перебор портов (и профилей), срок
+		// нужен на все.
+		DialTimeout: min(maxConnectTimeout, max(15*time.Second, time.Duration(len(d.ports))*perPortTimeout*time.Duration(d.poolSize())+7*time.Second)),
 		Every:       d.cfg.Rotation.Every.D(),
 		AfterBytes:  d.cfg.Rotation.AfterBytes,
 		Jitter:      d.cfg.Rotation.Jitter,

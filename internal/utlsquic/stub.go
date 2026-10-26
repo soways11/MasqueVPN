@@ -41,6 +41,10 @@ func Available() bool { return false }
 // Parrots возвращает список поддерживаемых профилей отпечатка.
 func Parrots() []string { return nil }
 
+// ValidateParrot в сборке без тега `utls` всегда возвращает ErrNotBuilt
+// (пул отпечатков требует transport=utls и до этой проверки не доходит).
+func ValidateParrot(name string) error { return ErrNotBuilt }
+
 // Config — те же поля, что и в utls-сборке.
 type Config struct {
 	Addr               string

@@ -41,6 +41,18 @@ type Client struct {
 	Parrot string `json:"parrot,omitempty"`
 	// FingerprintFile — снятый отпечаток браузера (JSON от fpcapture).
 	FingerprintFile string `json:"fingerprint_file,omitempty"`
+	// FingerprintPool — несколько профилей отпечатка, между которыми клиент
+	// выбирает по «здоровью»: с каким профилем подключиться не удалось (молчат
+	// все порты — признак блокировки на проводе), тот временно выпадает из
+	// пула, и клиент пробует следующий (см. internal/client, FingerprintMemory).
+	// Это не случайная ротация: смена отпечатка на каждом подключении сама
+	// стала бы приметой. По умолчанию удачный профиль помнится между запусками
+	// и идёт первым.
+	//
+	// Пусто — обычное поведение: один профиль (Parrot или встроенный по
+	// умолчанию). Несовместимо с FingerprintFile (тот задаёт единственный
+	// снятый профиль) и требует Transport=utls.
+	FingerprintPool []string `json:"fingerprint_pool,omitempty"`
 	// Protocol — webtransport (по умолчанию) или connect-ip.
 	Protocol string `json:"protocol,omitempty"`
 
@@ -291,6 +303,25 @@ func (c *Client) Validate() error {
 	case "", "utls", "quic":
 	default:
 		errs = append(errs, fmt.Errorf("transport: %q (utls, quic)", c.Transport))
+	}
+	if len(c.FingerprintPool) > 0 {
+		if c.FingerprintFile != "" {
+			errs = append(errs, errors.New("fingerprint_pool и fingerprint_file несовместимы: пул выбирает из встроенных профилей, файл задаёт единственный снятый"))
+		}
+		if c.Transport == "quic" {
+			errs = append(errs, errors.New("fingerprint_pool требует transport=utls"))
+		}
+		seen := map[string]bool{}
+		for _, name := range c.FingerprintPool {
+			if name == "" {
+				errs = append(errs, errors.New("fingerprint_pool: пустое имя профиля"))
+				continue
+			}
+			if seen[name] {
+				errs = append(errs, fmt.Errorf("fingerprint_pool: профиль %q указан дважды", name))
+			}
+			seen[name] = true
+		}
 	}
 	if _, err := Protocol(c.Protocol); err != nil {
 		errs = append(errs, err)

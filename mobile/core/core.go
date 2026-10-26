@@ -183,6 +183,10 @@ func (t *Tunnel) SetStateDir(dir string) {
 // туннелей: служба VPN пересоздаёт Tunnel при каждом включении.
 var processPorts = client.MemPortMemory()
 
+// processFingerprints — память здоровья профилей отпечатка на время жизни
+// процесса (как processPorts). Действует при заданном fingerprint_pool.
+var processFingerprints = client.MemFingerprintMemory()
+
 // State — текущее состояние.
 func (t *Tunnel) State() string {
 	t.mu.Lock()
@@ -307,9 +311,10 @@ func (t *Tunnel) dialOptions(cfg *config.Client, p Protector, log *slog.Logger) 
 	t.mu.Lock()
 	device, dir := t.deviceID, t.stateDir
 	t.mu.Unlock()
-	opt := client.Options{Logger: log, DeviceID: device, Ports: processPorts}
+	opt := client.Options{Logger: log, DeviceID: device, Ports: processPorts, Fingerprints: processFingerprints}
 	if dir != "" {
 		opt.Ports = client.FilePortMemory(filepath.Join(dir, client.PortsFile))
+		opt.Fingerprints = client.FileFingerprintMemory(filepath.Join(dir, client.FingerprintsFile))
 	}
 	if p != nil {
 		// Защита сокета — обязательна при полном туннеле: без неё пакеты
