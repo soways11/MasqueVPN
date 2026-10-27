@@ -95,7 +95,12 @@ android {
 // зависимости от copyLegal. Покрываем и сборку assets (merge*Assets), и все
 // задачи lint — copyLegal дёшев, лишняя зависимость безвредна.
 tasks.configureEach {
-    if ((name.startsWith("merge") && name.endsWith("Assets")) || name.contains("Lint")) {
+    // Регистронезависимо: lint-задачи бывают и с заглавной
+    // (generateReleaseLintVitalReportModel), и со строчной
+    // (lintVitalAnalyzeRelease) — читают build/generated/legal напрямую.
+    // Остальные потребители берут уже СЛИТЫЕ assets (выход merge*Assets) и
+    // зависимость получают через неё.
+    if ((name.startsWith("merge") && name.endsWith("Assets")) || name.contains("lint", ignoreCase = true)) {
         dependsOn(copyLegal)
     }
 }
