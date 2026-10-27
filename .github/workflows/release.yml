@@ -66,6 +66,10 @@ jobs:
   android:
     name: APK
     runs-on: ubuntu-latest
+    # APK не должен ронять весь релиз: при его падении desktop-артефакты
+    # (Windows/Linux/VPS) всё равно выходят, как и задумано. Черновик релиза
+    # (job publish) зависит от этой job, поэтому её неудача не блокирует его.
+    continue-on-error: true
     needs: version
     env:
       VERSION: ${{ needs.version.outputs.version }}

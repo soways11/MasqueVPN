@@ -88,10 +88,14 @@ android {
     }
 }
 
-// Копирование лицензий должно случиться до сборки assets — иначе задача
-// просто не выполнится и APK снова уедет без текстов.
+// Копирование лицензий должно случиться до всех задач, читающих каталог
+// assets, — иначе задача просто не выполнится (APK уедет без текстов), а на
+// release-сборке Gradle 8.11 вовсе падает: lint-задача
+// generateReleaseLintVitalReportModel читает build/generated/legal, не объявив
+// зависимости от copyLegal. Покрываем и сборку assets (merge*Assets), и все
+// задачи lint — copyLegal дёшев, лишняя зависимость безвредна.
 tasks.configureEach {
-    if (name.startsWith("merge") && name.endsWith("Assets")) {
+    if ((name.startsWith("merge") && name.endsWith("Assets")) || name.contains("Lint")) {
         dependsOn(copyLegal)
     }
 }
