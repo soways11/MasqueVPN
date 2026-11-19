@@ -214,6 +214,9 @@ func testNothingEscapes(t *testing.T, killSwitch bool) {
 		dnsResolver:    true,
 		noClient:       true,
 		extraCli:       map[string]any{"kill_switch": killSwitch},
+		// DNS-тест проверяет запрос через TUN к резолверу в namespace
+		// сервера. Разрешаем его адрес только на этом стенде.
+		extraSrv: map[string]any{"tunnel_allow": []string{internet, internet6, ispResolver}},
 	}
 	s := newStand(t, o)
 
