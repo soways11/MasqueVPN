@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"slices"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -238,12 +237,12 @@ func (h *Handler) serveTunnel(w http.ResponseWriter, r *http.Request, clientID, 
 	// Политика клиента — до выделения адреса и по той же причине: отказ не
 	// должен расходовать адрес из пула. Причина отказа уходит в журнал
 	// сервера, а клиент получает ровно тот же ответ, что посторонний.
-	if h.cfg.Policy != nil {
-		if err := h.cfg.Policy.Admit(clientID, h.live.count(clientID)); err != nil {
-			rejectStranger(w, r)
-			return
-		}
+	slot, err := h.live.reserve(clientID, h.cfg.Policy)
+	if err != nil {
+		rejectStranger(w, r)
+		return
 	}
+	defer h.live.remove(clientID, slot)
 
 	// Адреса берутся в аренду за УСТРОЙСТВОМ клиента (см. lease.go):
 	// вернувшееся устройство получает свой прежний адрес сразу, а не
@@ -256,14 +255,19 @@ func (h *Handler) serveTunnel(w http.ResponseWriter, r *http.Request, clientID, 
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	defer h.leases.release(lease)
+	defer func() { h.leases.release(lease, h.live.revoked(slot)) }()
 	addrs := h.leases.addrsOf(lease)
+	if h.live.revoked(slot) {
+		rejectStranger(w, r)
+		return
+	}
 
 	w.Header().Set(http3.CapsuleProtocolHeader, "?1")
 	w.WriteHeader(http.StatusOK)
 	str := streamer.HTTPStream() // отправляет заголовки ответа
 
 	c := newConn(serverStream{str}, roleServer, nil)
+	defer c.Close()
 	c.shaping = h.cfg.Shaping
 	c.packing = h.cfg.Packing
 	if !h.cfg.AllowClientToClient {
@@ -287,62 +291,32 @@ func (h *Handler) serveTunnel(w http.ResponseWriter, r *http.Request, clientID, 
 			c.limiter = newRateLimiter(bps, burst)
 		}
 	}
-	h.live.add(clientID, c)
-	defer h.live.remove(clientID, c)
+	if !h.live.attach(slot, c) {
+		return
+	}
 	if ss, ok := h.cfg.Policy.(sessionStarter); ok && clientID != "" {
 		ss.StartedSession(clientID)
 	}
 	c.onAddrReq = func(c *Conn, reqs []RequestedAddress) {
 		// RFC 9484: клиент может попросить конкретный адрес — например, свой
 		// прежний, чтобы соединения внутри туннеля пережили переподключение.
-		// Выдаём запрошенный, если он свободен; иначе оставляем текущий.
-		cur := h.leases.addrsOf(lease)
-		ids := make([]uint64, len(cur))
-		changed := false
-		for _, rq := range reqs {
-			want := rq.Prefix.Addr()
-			idx := -1
-			for i, a := range cur {
-				if a.Addr().Is4() == want.Is4() {
-					idx = i
-					break
-				}
-			}
-			if idx < 0 {
-				continue // этого семейства сервер не обслуживает
-			}
-			ids[idx] = rq.RequestID
-			if want == cur[idx].Addr() || want.IsUnspecified() {
-				continue // просят то, что уже выдано, либо без предпочтений
-			}
-			got, err := h.cfg.Pools[idx].Allocate(want)
-			if err != nil {
-				continue // пул исчерпан — остаёмся при своём
-			}
-			if got.Addr() != want {
-				h.cfg.Pools[idx].Release(got) // дали не то, что просили
-				continue
-			}
-			h.cfg.Pools[idx].Release(cur[idx])
-			cur[idx] = got
-			changed = true
-		}
-		if changed {
-			prev := h.leases.addrsOf(lease)
-			h.leases.setAddrs(lease, cur)
-			_ = c.AssignAddresses(cur, ids...)
-			if h.cfg.OnAddressChange != nil {
-				h.cfg.OnAddressChange(c, prev, slices.Clone(cur))
-			}
+		// Выдаём свободный адрес, если другие сессии не делят эту аренду.
+		prev, cur, ids := h.leases.reassign(lease, reqs)
+		if cur == nil {
 			return
 		}
-		_ = c.AssignAddresses(cur, ids...)
+		if err := c.AssignAddresses(cur, ids...); err != nil {
+			c.closeWithError(err)
+			return
+		}
+		if prev != nil && h.cfg.OnAddressChange != nil {
+			h.cfg.OnAddressChange(c, prev, cur)
+		}
 	}
 	// Первичную выдачу делаем ДО запуска обработчика капсул: иначе он может
 	// начать менять адреса по ADDRESS_REQUEST одновременно с чтением здесь.
 	// Запись капсул обработчика не требует.
-	initial := slices.Clone(addrs)
-	if err := c.AssignAddresses(initial); err != nil {
+	if err := c.AssignAddresses(addrs); err != nil {
 		return
 	}
 	if err := c.AdvertiseRoutes(h.cfg.Routes); err != nil {
@@ -350,7 +324,6 @@ func (h *Handler) serveTunnel(w http.ResponseWriter, r *http.Request, clientID, 
 	}
 
 	c.start()
-	defer c.Close()
 
 	if h.cfg.Policy != nil && clientID != "" {
 		stopAcct := h.accountLoop(c, clientID)
@@ -360,7 +333,7 @@ func (h *Handler) serveTunnel(w http.ResponseWriter, r *http.Request, clientID, 
 	if h.cfg.OnSession != nil {
 		// Передаётся адрес на момент открытия сессии; далее он может смениться
 		// по ADDRESS_REQUEST — актуальный смотреть через Conn.
-		h.cfg.OnSession(c.ctx, c, initial[0])
+		h.cfg.OnSession(c.ctx, c, addrs[0])
 		return
 	}
 	<-c.Done()

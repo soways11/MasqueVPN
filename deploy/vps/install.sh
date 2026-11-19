@@ -283,8 +283,8 @@ $ACME_LINE  /etc/systemd/system/masquevpn.service     служба, запуск
   Сертификат:     $CERT_WHERE
 $COVER_LINE
 
-  Создаётся своя таблица nftables (inet masquevpn) — существующие правила
-  не трогаются.  Отменить всё: sudo sh $here/uninstall.sh
+  Сервер создаёт таблицы nftables для NAT (masquevpn) и фильтра TUN
+  (masquevpn_ingress).  Отменить всё: sudo sh $here/uninstall.sh
 $FIREWALL_LINE
 EOF
 if [ "${MASQUEVPN_YES:-${GOVPN_YES:-}}" != "1" ]; then

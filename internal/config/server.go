@@ -53,6 +53,9 @@ type Server struct {
 	NAT NAT `json:"nat"`
 	// AllowClientToClient — разрешить клиентам видеть друг друга.
 	AllowClientToClient bool `json:"allow_client_to_client,omitempty"`
+	// TunnelAllow — адреса и подсети, открытые для клиентов на сервере
+	// и в сетях за ним. По умолчанию доступ к внутренним сетям закрыт.
+	TunnelAllow []string `json:"tunnel_allow,omitempty"`
 
 	// Packing — упаковка датаграмм (C2): агрегация, фрагментация, профиль.
 	Packing *Packing `json:"packing,omitempty"`
@@ -300,6 +303,9 @@ func (c *Server) Validate() error {
 	if _, err := c.Pools(); err != nil {
 		errs = append(errs, err)
 	}
+	if _, err := c.TunnelAllowed(); err != nil {
+		errs = append(errs, err)
+	}
 	if _, err := ShapingProfile(c.Shaping); err != nil {
 		errs = append(errs, err)
 	}
@@ -321,6 +327,11 @@ func (c *Server) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// TunnelAllowed возвращает явные исключения из фильтра трафика с TUN.
+func (c *Server) TunnelAllowed() ([]netip.Prefix, error) {
+	return addressPrefixes("tunnel_allow", c.TunnelAllow)
 }
 
 // UsagePath — путь к файлу учёта расхода.

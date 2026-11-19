@@ -45,28 +45,58 @@ type sessionStarter interface {
 // клиента, и для отзыва: чтобы закрыть чужие сессии, их надо сначала найти.
 type liveSessions struct {
 	mu   sync.Mutex
-	byID map[string]map[*Conn]struct{}
+	byID map[string]map[*liveSession]struct{}
+}
+
+type liveSession struct {
+	conn    *Conn
+	revoked bool
 }
 
 func newLiveSessions() *liveSessions {
-	return &liveSessions{byID: map[string]map[*Conn]struct{}{}}
+	return &liveSessions{byID: map[string]map[*liveSession]struct{}{}}
 }
 
-func (s *liveSessions) add(id string, c *Conn) {
-	if id == "" {
-		return
-	}
+// reserve проверяет доступ и занимает место до выделения адреса и отправки
+// ответа. Отзыв видит и сессии, для которых поток ещё не готов.
+func (s *liveSessions) reserve(id string, policy Policy) (*liveSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := s.byID[id]
+	if policy != nil {
+		if err := policy.Admit(id, len(m)); err != nil {
+			return nil, err
+		}
+	}
+	slot := new(liveSession)
+	if id == "" {
+		return slot, nil
+	}
 	if m == nil {
-		m = map[*Conn]struct{}{}
+		m = map[*liveSession]struct{}{}
 		s.byID[id] = m
 	}
-	m[c] = struct{}{}
+	m[slot] = struct{}{}
+	return slot, nil
 }
 
-func (s *liveSessions) remove(id string, c *Conn) {
+func (s *liveSessions) attach(slot *liveSession, c *Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if slot.revoked {
+		return false
+	}
+	slot.conn = c
+	return true
+}
+
+func (s *liveSessions) revoked(slot *liveSession) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slot.revoked
+}
+
+func (s *liveSessions) remove(id string, slot *liveSession) {
 	if id == "" {
 		return
 	}
@@ -76,7 +106,7 @@ func (s *liveSessions) remove(id string, c *Conn) {
 	if m == nil {
 		return
 	}
-	delete(m, c)
+	delete(m, slot)
 	if len(m) == 0 {
 		delete(s.byID, id)
 	}
@@ -91,23 +121,31 @@ func (s *liveSessions) count(id string) int {
 	return len(s.byID[id])
 }
 
-// conns возвращает копию списка сессий клиента: закрывать их под замком
-// нельзя, закрытие само дёргает remove.
-func (s *liveSessions) conns(id string) []*Conn {
+// revoke запрещает завершить открытие отозванных сессий и возвращает
+// уже открытые соединения. Сами потоки закрываются после снятия замка.
+func (s *liveSessions) revoke(id string) (int, []*Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := s.byID[id]
-	out := make([]*Conn, 0, len(m))
-	for c := range m {
-		out = append(out, c)
+	conns := make([]*Conn, 0, len(m))
+	n := 0
+	for slot := range m {
+		if slot.revoked {
+			continue
+		}
+		slot.revoked = true
+		n++
+		if slot.conn != nil {
+			conns = append(conns, slot.conn)
+		}
 	}
-	return out
+	return n, conns
 }
 
-// CloseClient закрывает все сессии клиента и возвращает, сколько закрыл.
+// CloseClient отменяет открываемые сессии клиента и закрывает открытые.
 // Так работает отзыв: без этого запись из реестра исчезает, а трафик идёт.
 func (h *Handler) CloseClient(id string) int {
-	conns := h.live.conns(id)
+	n, conns := h.live.revoke(id)
 	for _, c := range conns {
 		c.Close()
 	}
@@ -115,10 +153,10 @@ func (h *Handler) CloseClient(id string) int {
 	// он не вернётся, а адрес всё это время числился бы занятым. Сессии
 	// отпускают аренду асинхронно, поэтому пробуем и после них.
 	h.leases.forget(id)
-	return len(conns)
+	return n
 }
 
-// LiveSessions — сколько сессий сейчас у клиента (для журнала и тестов).
+// LiveSessions — число активных и открываемых сессий клиента.
 func (h *Handler) LiveSessions(id string) int { return h.live.count(id) }
 
 // accountLoop снимает счётчики сессии по таймеру и отдаёт политике прирост.

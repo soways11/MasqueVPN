@@ -86,7 +86,7 @@ func TestKillSwitchConstruction(t *testing.T) {
 		// машине это молча обрубило стороннее прокси-соединение, а заодно
 		// упёрлось бы прикрытие DNS: его запросы обязаны идти к резолверу
 		// провайдера мимо туннеля, иначе они не прикрытие.
-		if !strings.Contains(src, "func KillSwitchArm(tunLUID uint64, allow []netip.Prefix)") {
+		if !strings.Contains(src, "func KillSwitchArm(tunLUID uint64, allow []netip.Prefix, strict bool)") {
 			t.Error("KillSwitchArm не принимает список разрешённых адресов")
 		}
 		if !strings.Contains(src, "func filterPlan(tunLUID uint64, allow []netip.Prefix)") {
@@ -121,19 +121,20 @@ func TestKillSwitchConstruction(t *testing.T) {
 				t.Errorf("нет %q: блокировка не увидит соединений, открытых до её включения", want)
 			}
 		}
-		// И ставятся они ОТДЕЛЬНОЙ транзакцией: если слоёв на системе нет,
-		// лучше остаться с прежней защитой ALE, чем не поднять блокировку
-		// вовсе. Мутация: добавить packetFilterPlan в основной цикл
-		// applyLocked — отказ пакетного слоя начнёт валить подключение.
-		if !strings.Contains(src, "func (k *KillSwitch) addPacketLayers(") {
-			t.Error("пакетные фильтры ставятся не своей транзакцией: их отказ утянет " +
-				"за собой всю блокировку")
+		apply := section(src, "func (k *KillSwitch) applyLocked(")
+		if !strings.Contains(apply, "full := append(specs, packetFilterPlan(") ||
+			!strings.Contains(apply, "k.commitFilters(full, replace)") ||
+			!strings.Contains(apply, "if k.strict || (replace && k.packetErr == nil)") {
+			t.Error("полный набор должен применяться атомарно, а строгий режим и обновление полного набора должны отклонять частичную установку")
 		}
 		if !strings.Contains(src, "func (k *KillSwitch) PacketLayersFailed()") {
 			t.Error("нет способа узнать, что пакетный слой не встал — клиент промолчит " +
 				"о том, что защита слабее обещанной")
 		}
 		run := readSource(t, "../clientrun/run_windows.go")
+		if !hasCall(run, "netsetup.KillSwitchArm(luid, ksAllow, strict)") {
+			t.Error("клиент не передаёт флаг строгого режима в KillSwitchArm")
+		}
 		if !hasCall(run, "ks.PacketLayersFailed()") {
 			t.Error("клиент не сообщает о неудаче пакетного слоя")
 		}

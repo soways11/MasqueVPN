@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -59,12 +60,12 @@ func certHost(cert *tls.Certificate) string {
 // видит настоящий работающий сайт. 404 отличим от VPN не лучше, чем от
 // пустого домена, поэтому по умолчанию поднимается встроенный сайт, а про
 // голый 404 честно предупреждаем.
-func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Handler, error) {
+func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Handler, func(), error) {
 	switch {
 	case cfg.FallbackProxy != "":
 		u, err := url.Parse(cfg.FallbackProxy)
 		if err != nil {
-			return nil, fmt.Errorf("fallback_proxy: %w", err)
+			return nil, nil, fmt.Errorf("fallback_proxy: %w", err)
 		}
 		proxy := httputil.NewSingleHostReverseProxy(u)
 		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -74,10 +75,14 @@ func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Hand
 			http.Error(w, "502 Bad Gateway", http.StatusBadGateway)
 		}
 		log.Info("сайт-прикрытие", "proxy", cfg.FallbackProxy)
-		return proxy, nil
+		return proxy, nil, nil
 	case cfg.FallbackDir != "":
+		root, err := os.OpenRoot(cfg.FallbackDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("fallback_dir: %w", err)
+		}
 		log.Info("сайт-прикрытие", "dir", cfg.FallbackDir)
-		return http.FileServer(http.Dir(cfg.FallbackDir)), nil
+		return http.FileServerFS(root.FS()), func() { _ = root.Close() }, nil
 	case !cfg.FallbackSite.Disabled:
 		s, legacy := cfg.FallbackSite.WithoutLegacyText()
 		if legacy {
@@ -92,7 +97,7 @@ func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Hand
 		// отвечают и объявляется ли WebTransport (см. internal/site/legends.go).
 		ports, err := cfg.UDPPorts()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		h, err := site.New(site.Options{
 			Host:           host,
@@ -104,14 +109,14 @@ func buildFallback(cfg *config.Server, host string, log *slog.Logger) (http.Hand
 			NoWebTransport: cfg.WebTransport != nil && !*cfg.WebTransport,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("fallback_site: %w", err)
+			return nil, nil, fmt.Errorf("fallback_site: %w", err)
 		}
 		log.Info("сайт-прикрытие", "встроенный", host)
-		return h, nil
+		return h, nil, nil
 	default:
 		log.Warn("сайта-прикрытия нет: посторонний увидит только 404 — задайте fallback_proxy, fallback_dir " +
 			"или включите встроенный сайт (fallback_site.disabled=false)")
-		return http.HandlerFunc(http.NotFound), nil
+		return http.HandlerFunc(http.NotFound), nil, nil
 	}
 }
 
@@ -351,6 +356,19 @@ func run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err := netsetup.ConfigureInterface(dev.Name(), dev.MTU(), gwAddrs); err != nil {
 		return err
 	}
+	allow, err := cfg.TunnelAllowed()
+	if err != nil {
+		return err
+	}
+	removeFilter, err := netsetup.FilterTunnel(dev.Name(), gwAddrs, allow, cfg.AllowClientToClient)
+	if err != nil {
+		return fmt.Errorf("фильтр серверного TUN: %w", err)
+	}
+	defer func() {
+		if err := removeFilter(); err != nil {
+			log.Warn("снятие фильтра серверного TUN", "err", err)
+		}
+	}()
 	if err := netsetup.EnableForwarding(); err != nil {
 		return err
 	}
@@ -379,9 +397,12 @@ func run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 
 	router := tunnel.NewRouter(dev, tunnel.RouterOptions{Logger: log})
 
-	fallback, err := buildFallback(cfg, host, log)
+	fallback, closeFallback, err := buildFallback(cfg, host, log)
 	if err != nil {
 		return err
+	}
+	if closeFallback != nil {
+		defer closeFallback()
 	}
 	fallback = withoutCONNECT(fallback)
 	var limits *masque.Limits

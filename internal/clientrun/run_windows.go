@@ -150,7 +150,7 @@ func Run(ctx context.Context, cfg *config.Client, log *slog.Logger, hooks Hooks)
 			return err
 		}
 		ksAllow = append(allowList(dialer.ServerIP()), extra...)
-		k, err := netsetup.KillSwitchArm(luid, ksAllow)
+		k, err := netsetup.KillSwitchArm(luid, ksAllow, strict)
 		switch {
 		case err != nil && strict:
 			// Не поднялась — не поднимаем и туннель молча в опасном

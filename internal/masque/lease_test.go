@@ -33,40 +33,40 @@ func TestAddressLeaseFollowsClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := l1.addrs[0]
+	addr := r.addrsOf(l1)[0]
 
 	// Ротация: вторая сессия того же клиента при живой первой.
 	l2, err := r.acquire("клиент-1", "устройство")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l2.addrs[0] != addr {
-		t.Fatalf("при ротации клиент получил %s вместо %s", l2.addrs[0], addr)
+	if r.addrsOf(l2)[0] != addr {
+		t.Fatalf("при ротации клиент получил %s вместо %s", r.addrsOf(l2)[0], addr)
 	}
 	if pool.InUse() != 1 {
 		t.Fatalf("адрес задвоился в пуле: занято %d", pool.InUse())
 	}
 
 	// Старая сессия ушла — адрес остаётся за клиентом.
-	r.release(l1)
+	r.release(l1, false)
 	if pool.InUse() != 1 {
 		t.Fatal("адрес отдан, пока клиент на связи")
 	}
 
 	// Ушла и новая: адрес держится ещё TTL.
-	r.release(l2)
+	r.release(l2, false)
 	if pool.InUse() != 1 {
 		t.Fatal("адрес отдан сразу после ухода клиента — при переподключении он получит чужой")
 	}
 	l3, _ := r.acquire("клиент-1", "устройство")
-	if l3.addrs[0] != addr {
-		t.Fatalf("после переподключения выдан %s вместо %s", l3.addrs[0], addr)
+	if r.addrsOf(l3)[0] != addr {
+		t.Fatalf("после переподключения выдан %s вместо %s", r.addrsOf(l3)[0], addr)
 	}
-	r.release(l3)
+	r.release(l3, false)
 
 	// Другой клиент получает свой адрес.
 	l4, _ := r.acquire("клиент-2", "устройство")
-	if l4.addrs[0] == addr {
+	if r.addrsOf(l4)[0] == addr {
 		t.Fatal("двум клиентам выдан один адрес")
 	}
 
@@ -92,7 +92,7 @@ func TestAddressLeaseAnonymousAndExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.release(l)
+	r.release(l, false)
 	if pool.InUse() != 0 {
 		t.Fatal("адрес анонимной сессии не возвращён в пул")
 	}
@@ -104,19 +104,55 @@ func TestAddressLeaseAnonymousAndExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addrA := a.addrs[0]
+	addrA := r.addrsOf(a)[0]
 	if _, err := r.acquire("клиент-2", "устройство"); err == nil {
 		t.Fatal("второй клиент получил адрес при занятом пуле")
 	}
-	r.release(a)
+	r.release(a, false)
 	// Клиент-1 ушёл: его адрес ещё держится за ним, но отдать живому клиенту
 	// важнее, чем сохранить для ушедшего.
 	b, err := r.acquire("клиент-2", "устройство")
 	if err != nil {
 		t.Fatalf("пул исчерпан ушедшим клиентом: %v", err)
 	}
-	if b.addrs[0] != addrA {
-		t.Fatalf("выдан %s, а свободен был только %s", b.addrs[0], addrA)
+	if r.addrsOf(b)[0] != addrA {
+		t.Fatalf("выдан %s, а свободен был только %s", r.addrsOf(b)[0], addrA)
+	}
+}
+
+func TestSharedLeaseKeepsAddressesUntilSessionEnds(t *testing.T) {
+	pool := testPool(t, "10.8.0.0/29")
+	registry := newLeaseRegistry([]*IPPool{pool}, time.Minute)
+	first, err := registry.acquire("client", "device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := registry.addrsOf(first)[0]
+	overlap, err := registry.acquire("client", "device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferred := netip.MustParsePrefix("10.8.0.6/32")
+	request := []RequestedAddress{{RequestID: 1, Prefix: preferred}}
+
+	if old, current, ids := registry.reassign(first, request); old != nil || current[0] != original || ids[0] != 1 {
+		t.Fatalf("shared lease changed: old=%v current=%v ids=%v", old, current, ids)
+	}
+	registry.release(overlap, false)
+	if old, current, _ := registry.reassign(first, request); len(old) != 1 || old[0] != original || current[0] != preferred {
+		t.Fatalf("sole session failed to change lease: old=%v current=%v", old, current)
+	}
+	if got := pool.InUse(); got != 2 {
+		t.Fatalf("old address must remain reserved through session teardown, in use=%d", got)
+	}
+	third := netip.MustParsePrefix("10.8.0.5/32")
+	request[0].Prefix = third
+	if old, current, _ := registry.reassign(first, request); old != nil || current[0] != preferred {
+		t.Fatalf("session reserved a third address: old=%v current=%v", old, current)
+	}
+	registry.release(first, false)
+	if got := pool.InUse(); got != 1 {
+		t.Fatalf("old address was not released on teardown: in use=%d", got)
 	}
 }
 
@@ -306,11 +342,11 @@ func TestForgetFreesAllDevicesOfClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l1.addrs[0] == l2.addrs[0] {
+	if r.addrsOf(l1)[0] == r.addrsOf(l2)[0] {
 		t.Fatal("устройства одного клиента получили один адрес")
 	}
-	r.release(l1)
-	r.release(l2)
+	r.release(l1, false)
+	r.release(l2, false)
 
 	if !r.forget("клиент-1") {
 		t.Fatal("отзыв не нашёл ни одной аренды")
@@ -325,5 +361,5 @@ func TestForgetFreesAllDevicesOfClient(t *testing.T) {
 	if _, ok := r.byID[leaseKey("клиент-2", "ноутбук")]; !ok {
 		t.Fatal("отзыв забрал аренду другого клиента")
 	}
-	r.release(other)
+	r.release(other, false)
 }

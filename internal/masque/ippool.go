@@ -74,11 +74,8 @@ func (p *IPPool) hostPrefix(a netip.Addr) netip.Prefix {
 func (p *IPPool) Allocate(want netip.Addr) (netip.Prefix, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if want.IsValid() && p.inRange(want) {
-		if _, busy := p.used[want]; !busy {
-			p.used[want] = struct{}{}
-			return p.hostPrefix(want), nil
-		}
+	if got := p.reserveLocked(want); got.IsValid() {
+		return got, nil
 	}
 	start := p.next
 	a := start
@@ -93,6 +90,24 @@ func (p *IPPool) Allocate(want netip.Addr) (netip.Prefix, error) {
 			return netip.Prefix{}, ErrPoolExhausted
 		}
 	}
+}
+
+// reserve выдаёт только запрошенный адрес. Если он занят или вне пула,
+// набор выданных адресов не меняется.
+func (p *IPPool) reserve(want netip.Addr) netip.Prefix {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reserveLocked(want)
+}
+
+func (p *IPPool) reserveLocked(want netip.Addr) netip.Prefix {
+	if want.IsValid() && p.inRange(want) {
+		if _, busy := p.used[want]; !busy {
+			p.used[want] = struct{}{}
+			return p.hostPrefix(want)
+		}
+	}
+	return netip.Prefix{}
 }
 
 func (p *IPPool) inRange(a netip.Addr) bool {

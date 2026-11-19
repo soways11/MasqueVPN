@@ -58,8 +58,16 @@ type addrLease struct {
 	addrs  []netip.Prefix
 	// conns — сколько живых сессий этого клиента держат аренду. Больше
 	// одной бывает во время ротации.
-	conns  int
-	idleAt time.Time
+	conns     int
+	idleAt    time.Time
+	forgotten bool
+}
+
+// leaseUse хранит адреса, которые эта сессия успела использовать. Они
+// остаются занятыми до выхода обработчика, включая запись пакетов в TUN.
+type leaseUse struct {
+	lease   *addrLease
+	retired []netip.Prefix // не больше одного прежнего адреса из каждого пула
 }
 
 type leaseRegistry struct {
@@ -100,7 +108,7 @@ func leaseKey(client, device string) string {
 // устройство получает те же адреса, что и раньше. Пустой client (токен версии
 // 1 или сервер без проверки) аренды не создаёт — поведение как было, адрес
 // живёт ровно сессию.
-func (r *leaseRegistry) acquire(client, device string) (*addrLease, error) {
+func (r *leaseRegistry) acquire(client, device string) (*leaseUse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweepLocked()
@@ -110,7 +118,8 @@ func (r *leaseRegistry) acquire(client, device string) (*addrLease, error) {
 		if l := r.byID[id]; l != nil {
 			l.conns++
 			l.idleAt = time.Time{}
-			return l, nil
+			l.forgotten = false
+			return &leaseUse{lease: l}, nil
 		}
 	}
 	addrs, err := r.allocLocked()
@@ -128,41 +137,81 @@ func (r *leaseRegistry) acquire(client, device string) (*addrLease, error) {
 	if id != "" {
 		r.byID[id] = l
 	}
-	return l, nil
+	return &leaseUse{lease: l}, nil
 }
 
 // release отпускает аренду одной сессией.
-func (r *leaseRegistry) release(l *addrLease) {
-	if l == nil {
-		return
-	}
+func (r *leaseRegistry) release(use *leaseUse, revoked bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if l.conns > 0 {
-		l.conns--
+	l := use.lease
+	use.lease = nil
+	for i, a := range use.retired {
+		if a.IsValid() {
+			r.pools[i].Release(a)
+		}
 	}
+	use.retired = nil
+	l.conns--
 	if l.conns > 0 {
 		return
 	}
-	if l.id == "" {
+	if l.id == "" || revoked || l.forgotten {
 		r.freeLocked(l)
 		return
 	}
 	l.idleAt = r.now()
 }
 
-// setAddrs запоминает новые адреса аренды (клиент попросил другой адрес).
-func (r *leaseRegistry) setAddrs(l *addrLease, addrs []netip.Prefix) {
-	r.mu.Lock()
-	l.addrs = slices.Clone(addrs)
-	r.mu.Unlock()
-}
-
 // addrsOf — текущие адреса аренды.
-func (r *leaseRegistry) addrsOf(l *addrLease) []netip.Prefix {
+func (r *leaseRegistry) addrsOf(use *leaseUse) []netip.Prefix {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(l.addrs)
+	return slices.Clone(use.lease.addrs)
+}
+
+// reassign меняет адреса, только когда их использует одна сессия. Замок
+// сериализует смену адреса с открытием новой сессии того же устройства.
+func (r *leaseRegistry) reassign(use *leaseUse, reqs []RequestedAddress) (old, current []netip.Prefix, ids []uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	l := use.lease
+	if l == nil {
+		return nil, nil, nil
+	}
+	current = slices.Clone(l.addrs)
+	ids = make([]uint64, len(current))
+	if use.retired == nil {
+		use.retired = make([]netip.Prefix, len(current))
+	}
+	for _, req := range reqs {
+		want := req.Prefix.Addr()
+		idx := slices.IndexFunc(current, func(addr netip.Prefix) bool {
+			return addr.Addr().Is4() == want.Is4()
+		})
+		if idx < 0 {
+			continue
+		}
+		ids[idx] = req.RequestID
+		if l.conns != 1 || want.IsUnspecified() || want == current[idx].Addr() {
+			continue
+		}
+		got := use.retired[idx]
+		if !got.IsValid() {
+			got = r.pools[idx].reserve(want)
+		}
+		// Один запасной адрес на семейство позволяет вернуться к старому
+		// и ограничивает расход пула при серии запросов.
+		if got.Addr() != want {
+			continue
+		}
+		use.retired[idx], current[idx] = current[idx], got
+	}
+	if !slices.Equal(l.addrs, current) {
+		old = l.addrs
+		l.addrs = slices.Clone(current)
+	}
+	return old, current, ids
 }
 
 func (r *leaseRegistry) allocLocked() ([]netip.Prefix, error) {
@@ -235,9 +284,7 @@ func (r *leaseRegistry) leases() int {
 // устройств: их у одного клиента несколько (см. заголовок файла), и оставить
 // адрес за телефоном отозванного клиента — то же, что не отозвать.
 //
-// Аренда с живыми сессиями не трогается: адрес из-под работающей сессии
-// выдёргивать нельзя. Отзыв сначала закрывает сессии, а освобождение
-// происходит само, когда последняя отпустит аренду.
+// Живые сессии сохраняют адрес до выхода последней из них.
 func (r *leaseRegistry) forget(client string) bool {
 	if client == "" {
 		return false
@@ -246,7 +293,11 @@ func (r *leaseRegistry) forget(client string) bool {
 	defer r.mu.Unlock()
 	freed := false
 	for _, l := range r.byID {
-		if l.client != client || l.conns > 0 {
+		if l.client != client {
+			continue
+		}
+		if l.conns > 0 {
+			l.forgotten = true
 			continue
 		}
 		r.freeLocked(l)

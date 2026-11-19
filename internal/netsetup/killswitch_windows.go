@@ -280,8 +280,9 @@ type fwpV6AddrAndMask struct {
 // объект жив, жива и блокировка; закрылся дескриптор (Disarm или смерть
 // процесса) — WFP убрала фильтры.
 type KillSwitch struct {
-	mu sync.Mutex
-	h  windows.Handle // 0 — уже снято
+	mu     sync.Mutex
+	h      windows.Handle // 0 — уже снято
+	strict bool
 	// packetErr — почему не встали фильтры пакетного слоя (nil, если встали).
 	packetErr error
 }
@@ -306,7 +307,7 @@ var ErrKillSwitchClosed = errors.New("netsetup: аварийное отключ�
 //
 // Возвращённый объект НУЖНО держать: блокировка живёт ровно столько, сколько
 // открыт его дескриптор.
-func KillSwitchArm(tunLUID uint64, allow []netip.Prefix) (*KillSwitch, error) {
+func KillSwitchArm(tunLUID uint64, allow []netip.Prefix, strict bool) (*KillSwitch, error) {
 	// Остатки от клиента старой версии (персистентные) динамическая сессия не
 	// перекроет — убираем их до установки своих.
 	_ = KillSwitchOff()
@@ -315,7 +316,7 @@ func KillSwitchArm(tunLUID uint64, allow []netip.Prefix) (*KillSwitch, error) {
 	if err != nil {
 		return nil, err
 	}
-	k := &KillSwitch{h: h}
+	k := &KillSwitch{h: h, strict: strict}
 	if err := k.apply(tunLUID, allow, false); err != nil {
 		engineClose(h)
 		return nil, err
@@ -369,6 +370,26 @@ func (k *KillSwitch) apply(tunLUID uint64, allow []netip.Prefix, replace bool) e
 }
 
 func (k *KillSwitch) applyLocked(tunLUID uint64, allow []netip.Prefix, replace bool) error {
+	specs := filterPlan(tunLUID, allow)
+	full := append(specs, packetFilterPlan(tunLUID, allow)...)
+	err := k.commitFilters(full, replace)
+	if err == nil {
+		k.packetErr = nil
+		return nil
+	}
+	// При строгой защите требуется полный набор. При обновлении уже
+	// работающей полной защиты оставляем прежние фильтры на месте.
+	if k.strict || (replace && k.packetErr == nil) {
+		return err
+	}
+	if fallbackErr := k.commitFilters(specs, replace); fallbackErr != nil {
+		return errors.Join(err, fallbackErr)
+	}
+	k.packetErr = err
+	return nil
+}
+
+func (k *KillSwitch) commitFilters(specs []filterSpec, replace bool) error {
 	if r, _, _ := procFwpmTransBegin0.Call(uintptr(k.h), 0); r != 0 {
 		return fmt.Errorf("netsetup: FwpmTransactionBegin0: 0x%x", r)
 	}
@@ -389,7 +410,7 @@ func (k *KillSwitch) applyLocked(tunLUID uint64, allow []netip.Prefix, replace b
 		return err
 	}
 
-	for _, spec := range filterPlan(tunLUID, allow) {
+	for _, spec := range specs {
 		if err := addFilter(k.h, spec); err != nil {
 			return fmt.Errorf("%s: %w", spec.name, err)
 		}
@@ -397,36 +418,6 @@ func (k *KillSwitch) applyLocked(tunLUID uint64, allow []netip.Prefix, replace b
 
 	if r, _, _ := procFwpmTransCommit0.Call(uintptr(k.h)); r != 0 {
 		return fmt.Errorf("netsetup: FwpmTransactionCommit0: 0x%x", r)
-	}
-	committed = true
-
-	// Пакетные слои — отдельной транзакцией и не фатально: см.
-	// packetFilterPlan. Ошибку запоминаем, чтобы клиент сказал о ней в
-	// журнале: защита от утечки в этом случае слабее обещанной, и молчать
-	// об этом нельзя.
-	k.packetErr = k.addPacketLayers(tunLUID, allow)
-	return nil
-}
-
-// addPacketLayers ставит набор фильтров на пакетных слоях своей транзакцией.
-// Неудача откатывает только её: основной набор ALE остаётся стоять.
-func (k *KillSwitch) addPacketLayers(tunLUID uint64, allow []netip.Prefix) error {
-	if r, _, _ := procFwpmTransBegin0.Call(uintptr(k.h), 0); r != 0 {
-		return fmt.Errorf("netsetup: FwpmTransactionBegin0 (пакетный слой): 0x%x", r)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			procFwpmTransAbort0.Call(uintptr(k.h))
-		}
-	}()
-	for _, spec := range packetFilterPlan(tunLUID, allow) {
-		if err := addFilter(k.h, spec); err != nil {
-			return fmt.Errorf("%s (пакетный слой): %w", spec.name, err)
-		}
-	}
-	if r, _, _ := procFwpmTransCommit0.Call(uintptr(k.h)); r != 0 {
-		return fmt.Errorf("netsetup: FwpmTransactionCommit0 (пакетный слой): 0x%x", r)
 	}
 	committed = true
 	return nil
@@ -624,11 +615,7 @@ func filterPlan(tunLUID uint64, allow []netip.Prefix) []filterSpec {
 
 // packetFilterPlan — тот же набор, но на пакетных слоях: там решение
 // принимается на каждый пакет, поэтому блокировка достаёт и соединения,
-// открытые ДО её включения (см. layerOutboundIPPacketV4).
-//
-// Ставится ОТДЕЛЬНОЙ транзакцией, а не вместе с основным набором: если этих
-// слоёв на системе нет или они не принимают наши условия, лучше остаться с
-// прежней защитой ALE и сказать об этом, чем не поднять блокировку вовсе.
+// открытые до её включения. Полный набор применяется вместе с ALE.
 func packetFilterPlan(tunLUID uint64, allow []netip.Prefix) []filterSpec {
 	return planFor([]windows.GUID{layerOutboundIPPacketV4, layerOutboundIPPacketV6},
 		[]windows.GUID{layerOutboundIPPacketV6}, tunLUID, allow)

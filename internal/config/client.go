@@ -367,16 +367,24 @@ func (c *Client) ServerPorts() []string {
 
 // KillSwitchAllowed разбирает KillSwitchAllow: принимает и адрес, и подсеть.
 func (c *Client) KillSwitchAllowed() ([]netip.Prefix, error) {
-	out := make([]netip.Prefix, 0, len(c.KillSwitchAllow))
-	for _, s := range c.KillSwitchAllow {
+	return addressPrefixes("kill_switch_allow", c.KillSwitchAllow)
+}
+
+func addressPrefixes(field string, values []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(values))
+	for _, s := range values {
 		if p, err := netip.ParsePrefix(s); err == nil {
+			if p.Addr().Is4In6() && p.Bits() >= 96 {
+				p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+			}
 			out = append(out, p)
 			continue
 		}
 		a, err := netip.ParseAddr(s)
-		if err != nil {
-			return nil, fmt.Errorf("kill_switch_allow: %q — не адрес и не подсеть", s)
+		if err != nil || a.Zone() != "" {
+			return nil, fmt.Errorf("%s: %q — не адрес и не подсеть", field, s)
 		}
+		a = a.Unmap()
 		out = append(out, netip.PrefixFrom(a, a.BitLen()))
 	}
 	return out, nil

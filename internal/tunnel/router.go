@@ -185,6 +185,9 @@ func (r *Router) CloseAll() {
 // Serve обслуживает сессию до её закрытия — обработчик
 // masque.ServerConfig.OnSession.
 func (r *Router) Serve(ctx context.Context, c *masque.Conn, addr netip.Prefix) {
+	if ctx.Err() != nil {
+		return
+	}
 	p := &peer{c: c, out: make(chan []byte, r.queueLen)}
 	r.mu.Lock()
 	r.peers[c] = p
@@ -234,7 +237,7 @@ func (r *Router) Serve(ctx context.Context, c *masque.Conn, addr netip.Prefix) {
 	buf := make([]byte, maxPacket)
 	for { // клиент → TUN
 		n, err := c.ReadPacket(buf)
-		if err != nil {
+		if err != nil || ctx.Err() != nil {
 			break
 		}
 		if _, err := r.dev.Write(buf[:n]); err != nil {

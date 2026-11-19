@@ -944,9 +944,10 @@ func TestPreferredAddressHonored(t *testing.T) {
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("выдан адрес %v, запрашивался %v", got, want)
 	}
-	// Прежний адрес вернулся в пул, новый занят — утечки нет.
-	if env.pool.InUse() != 1 {
-		t.Fatalf("занято адресов %d, ожидался 1", env.pool.InUse())
+	// Прежний адрес остаётся занят до конца сессии, пока в обработчике
+	// ещё могут находиться пакеты, принятые до смены адреса.
+	if env.pool.InUse() != 2 {
+		t.Fatalf("занято адресов %d, ожидалось 2", env.pool.InUse())
 	}
 	// Новым адресом можно пользоваться: политика обновилась.
 	if err := c.WritePacket(buildIPv4(want.Addr(), netip.MustParseAddr("1.1.1.1"), 17, nil)); err != nil {
@@ -955,6 +956,14 @@ func TestPreferredAddressHonored(t *testing.T) {
 	// А старым — уже нельзя.
 	if err := c.WritePacket(buildIPv4(first.Addr(), netip.MustParseAddr("1.1.1.1"), 17, nil)); !errors.Is(err, ErrPacketRejected) {
 		t.Fatalf("пакет со старым адресом принят: %v", err)
+	}
+	c.Close()
+	deadline = time.Now().Add(3 * time.Second)
+	for env.pool.InUse() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := env.pool.InUse(); got != 0 {
+		t.Fatalf("после закрытия остались адреса: %d", got)
 	}
 }
 

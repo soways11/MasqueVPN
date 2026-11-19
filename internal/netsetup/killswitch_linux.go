@@ -199,7 +199,7 @@ func (k *KillSwitch) addRules(c *nftables.Conn, t *nftables.Table, ch *nftables.
 // daddrMatch собирает выражения «адрес назначения в подсети p». Повторяет приём
 // из nat_linux.go (там saddr), только смещение поля — назначения.
 func daddrMatch(p netip.Prefix) []expr.Any {
-	p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()).Masked()
+	p = p.Masked()
 	var proto byte = unix.NFPROTO_IPV4
 	var off, l uint32 = 16, 4 // ip daddr
 	if p.Addr().Is6() {

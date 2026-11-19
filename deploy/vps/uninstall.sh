@@ -27,8 +27,8 @@ done
 rm -f /usr/local/bin/vpnserver
 say "бинарник и служба удалены"
 
-# Таблицу NAT сервер снимает сам при остановке; если он не успел, убираем.
-for t in masquevpn govpn; do
+# Сервер снимает таблицы NAT и фильтра TUN при остановке.
+for t in masquevpn masquevpn_ingress govpn; do
     if command -v nft >/dev/null 2>&1 && nft list table inet "$t" >/dev/null 2>&1; then
         nft delete table inet "$t" || true
         say "таблица nftables inet $t удалена"

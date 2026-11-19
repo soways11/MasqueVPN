@@ -403,6 +403,7 @@ func (s *stand) startServer(t *testing.T, o opts) {
 		"auth_key":     s.authKey,
 		"tun":          map[string]any{"name": "masquevpn0", "mtu": o.serverMTU},
 		"pool4":        "10.66.0.0/24",
+		"tunnel_allow": []string{internet, internet6},
 		"nat":          map[string]any{"no_mss_clamp": o.noClamp},
 		"shaping":      "cloud-gaming-down",
 		"log_level":    "debug",

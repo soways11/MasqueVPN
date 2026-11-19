@@ -183,6 +183,29 @@ func TestPolicyPerClientSessionLimit(t *testing.T) {
 	other.Close()
 }
 
+func TestPendingSessionCountsTowardsLimitAndCanBeRevoked(t *testing.T) {
+	policy := newTestPolicy()
+	policy.maxLive = 1
+	sessions := newLiveSessions()
+	slot, err := sessions.reserve("client", policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.reserve("client", policy); err == nil {
+		t.Fatal("pending session did not count towards the limit")
+	}
+	if n, conns := sessions.revoke("client"); n != 1 || len(conns) != 0 {
+		t.Fatalf("revoke pending session: count=%d conns=%d", n, len(conns))
+	}
+	if sessions.attach(slot, new(Conn)) {
+		t.Fatal("revoked reservation could still become active")
+	}
+	sessions.remove("client", slot)
+	if _, err := sessions.reserve("client", policy); err != nil {
+		t.Fatalf("reservation did not release its slot: %v", err)
+	}
+}
+
 // Учёт трафика: без него квоты считать не на чем.
 func TestPolicyAccountsTraffic(t *testing.T) {
 	pol := newTestPolicy()
@@ -293,7 +316,6 @@ func TestCloseClientRevokesLiveSessions(t *testing.T) {
 	// он не вернётся, а адрес всё это время числился бы занятым.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		h.CloseClient("уходящий") // аренду отпускает закрывающаяся сессия, не мгновенно
 		if env.pool.InUse() == 1 {
 			return
 		}
